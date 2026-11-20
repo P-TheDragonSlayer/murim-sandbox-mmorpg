@@ -85,8 +85,44 @@ test('authoritative battle, interrupted meditation, death, loot, rebirth and per
     assert.equal(restored.state.you,aid);assert.equal(restored.state.players.find(p=>p.id===aid).x,350);assert.equal(restored.state.players.find(p=>p.id===aid).y,500);
     assert.ok(restored.state.players.find(p=>p.id===aid).items.length>=2);assert.equal(restored.state.corpses[0].looted,true);
     const denied=await fetch(`http://127.0.0.1:${port}/server/data/state.json`);assert.equal(denied.status,404);
+    // Encoded separators survive URL normalization until the server decodes them.
+    const traversal=await fetch(`http://127.0.0.1:${port}/public/%2e%2e%2fserver%2findex.cjs`);
+    assert.equal(traversal.status,404, 'private server files must not be readable via encoded traversal');
   } finally {
     for(const c of [a,b,restored])if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();
+    await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
+
+test('WebSocket closes a client that floods messages', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  let proc,c;
+  try {
+    proc=await startServer(port,dataPath);c=await connect(port,'rate limit');
+    const closed=new Promise(resolve=>c.ws.once('close',code=>resolve(code)));
+    for(let i=0;i<151;i++)send(c,{type:'unknown'});
+    assert.equal(await closed,1008);
+  } finally {
+    if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
+
+test('replacing a live session ends its battle for both players', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  let proc,a,b,replacement;
+  try {
+    proc=await startServer(port,dataPath);a=await connect(port,'A');b=await connect(port,'B');
+    for(let i=0;i<10;i++){send(a,{type:'move',direction:1});send(b,{type:'move',direction:1});await delay(100)}
+    await until(()=>a.state.players.find(p=>p.id===a.state.you)?.x>=580,'leave safe area');
+    send(a,{type:'challenge',targetId:b.state.you});await until(()=>a.state.battles.length===1,'battle started');
+    replacement=await connect(port,'ignored',a.welcome.token);
+    await until(()=>b.state.battles.length===0,'battle cleared');
+    assert.equal(replacement.state.players.find(p=>p.id===replacement.state.you).city,true);
+    assert.equal(b.state.players.find(p=>p.id===b.state.you).combatId,null);
+  } finally {
+    for(const c of [a,b,replacement])if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();
     await stopServer(proc);
     if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
   }

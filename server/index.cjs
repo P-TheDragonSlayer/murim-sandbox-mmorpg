@@ -139,14 +139,24 @@ function onMessage(ws, raw) {
   if(!m || typeof m.type!=='string')return;
   if(m.type==='join') {
     if(ws.playerId) return;
-    let token=typeof m.token==='string' && state.accounts[m.token] ? m.token : crypto.randomBytes(32).toString('hex');
+    let token=typeof m.token==='string' && Object.hasOwn(state.accounts,m.token) ? m.token : crypto.randomBytes(32).toString('hex');
     let p=state.accounts[token];
     if(!p) {
       const name=String(m.name||'จอมยุทธ์').trim().slice(0,24)||'จอมยุทธ์';
       p={...createFighter({id:id(),name}),x:DEFAULT_SPAWN.x,y:DEFAULT_SPAWN.y,facing:1,deaths:0,bestPower:0,items:[{id:id(),name:'กระบี่ฝึก',history:[{event:'created',owner:name,at:Date.now()}]}]};
       state.accounts[token]=p; save();
     }
-    const old=sockets.get(p.id); sockets.set(p.id,ws); ws.playerId=p.id; if(old && old!==ws)old.close();
+    const old=sockets.get(p.id);
+    // A second tab replacing a live session must clean up its battle and
+    // channel before taking ownership; the old close handler is intentionally
+    // ignored once this socket takes over.
+    if(old && old!==ws) {
+      cancelChannel(p,false);
+      if(p.combatId) endBattle(battles.get(p.combatId));
+      if(!p.dead) Object.assign(p,DEFAULT_SPAWN);
+      old.close();
+    }
+    sockets.set(p.id,ws); ws.playerId=p.id;
     p.combatId=null; send(ws,{type:'welcome',token,playerId:p.id}); broadcast(); return;
   }
   const p=findPlayer(ws.playerId); if(!p || sockets.get(p.id)!==ws) return err(ws,'กรุณาเข้าเกมก่อน');
@@ -197,13 +207,27 @@ const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=u
 const server=http.createServer((req,res)=>{
   let url;try{url=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.writeHead(400).end();return;}
   if(url==='/')url='/index.html';
-  const allowed=url==='/index.html'||url.startsWith('/src/')||url.startsWith('/assets/')||url.startsWith('/public/')||url.startsWith('/node_modules/phaser/dist/');
-  const file=path.resolve(root,'.'+url);if(!allowed||!file.startsWith(root+path.sep)){res.writeHead(404).end();return;}
+  // Authorize the resolved path, not the encoded URL. An encoded slash can make
+  // /public/../server/data resolve to private state after URL decoding.
+  if (url.includes('\0')) { res.writeHead(404).end(); return; }
+  const file=path.resolve(root,'.'+url);
+  const relative=path.relative(root,file).split(path.sep).join('/');
+  const allowed=relative==='index.html'||relative.startsWith('src/')||relative.startsWith('assets/')||relative.startsWith('public/')||relative.startsWith('node_modules/phaser/dist/');
+  if(!allowed||!file.startsWith(root+path.sep)){res.writeHead(404).end();return;}
   fs.readFile(file,(e,data)=>{if(e){res.writeHead(404).end();return;}res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-store'});res.end(data);});
 });
 const wss=new WebSocketServer({server,path:'/ws',maxPayload:8192});
 wss.on('connection', ws=>{
-  ws.on('error',()=>{});ws.on('message',raw=>{try{onMessage(ws,raw);}catch(e){console.error('message failure',e);err(ws,'เกิดข้อผิดพลาด');}});
+  // A bounded connection and message budget protects this small, single-process
+  // prototype against accidental or abusive unbounded broadcasts and disk writes.
+  if (wss.clients.size > 128) { ws.close(1013, 'Server full'); return; }
+  let windowStarted=Date.now(), windowMessages=0;
+  ws.on('error',()=>{});ws.on('message',raw=>{
+    const now=Date.now();
+    if(now-windowStarted>=10000){windowStarted=now;windowMessages=0;}
+    if(++windowMessages>150){ws.close(1008,'Rate limit');return;}
+    try{onMessage(ws,raw);}catch(e){console.error('message failure',e);err(ws,'เกิดข้อผิดพลาด');}
+  });
   ws.on('close',()=>{
     const p=findPlayer(ws.playerId);if(!p||sockets.get(p.id)!==ws)return;
     sockets.delete(p.id);cancelChannel(p,false);if(p.combatId)endBattle(battles.get(p.combatId));
