@@ -48,3 +48,17 @@
 .fighter.has-art{width:22%;height:55%;transform:none}
 .fighter-opponent.has-art{right:9%;top:0}
 .fighter-player.has-art{left:8%;bottom:0;transform:scaleX(-1)}
+
+/* One four-by-two sheet supplies town walking and battle sword frames. */
+.fighter.has-sheet .fighter-art{display:none}
+.fighter.has-sheet{height:65%}
+.fighter-player.has-sheet{transform:none}
+.fighter-opponent.has-sheet{transform:scaleX(-1)}
+.fighter-sprite{display:block;position:absolute;left:50%;bottom:0;height:100%;aspect-ratio:1;transform:translateX(-50%);background-repeat:no-repeat;background-size:400% 200%;background-position:0 0;image-rendering:pixelated}
+.fighter.is-attacking .fighter-sprite{animation:fighter-strike .56s steps(4,end)}
+.fighter.is-hit .fighter-sprite,.fighter.is-hit .fighter-art{animation:fighter-hit .42s ease-out}
+.fighter.is-attacking:not(.has-sheet) .fighter-art{animation:fighter-lunge .45s ease-out}
+@keyframes fighter-strike{from{background-position:0 100%}to{background-position:133.333% 100%}}
+@keyframes fighter-lunge{35%{transform:translateX(-15%) rotate(-6deg)}to{transform:none}}
+@keyframes fighter-hit{25%{filter:brightness(2);translate:8% 0}55%{translate:-3% 0}to{filter:none;translate:0 0}}
+@media (prefers-reduced-motion:reduce){.fighter.is-attacking .fighter-sprite,.fighter.is-attacking .fighter-art,.fighter.is-hit .fighter-sprite,.fighter.is-hit .fighter-art{animation-duration:.01ms}}

@@ -11,14 +11,47 @@ function setBattlePortrait(side, url) {
   if (!holder || holder.dataset.portrait === (url || '')) return;
   holder.dataset.portrait = url || '';
   holder.classList.remove('has-art');
+  holder.classList.remove('has-sheet');
   holder.querySelector('.fighter-art')?.remove();
+  holder.querySelector('.fighter-sprite')?.remove();
   if (!url) return;
   const portrait = new Image(); portrait.alt = ''; portrait.className = 'fighter-art';
   portrait.onload = () => {
     if (holder.dataset.portrait !== url) return;
     holder.appendChild(portrait); holder.classList.add('has-art');
+    if (url === BATTLE_ART.player && BATTLE_ART.playerSheet) {
+      const sheet = new Image();
+      sheet.onload = () => {
+        if (holder.dataset.portrait !== url) return;
+        const sprite = document.createElement('span');
+        sprite.className = 'fighter-sprite';
+        sprite.style.backgroundImage = `url("${BATTLE_ART.playerSheet}")`;
+        holder.appendChild(sprite);
+        holder.classList.add('has-sheet');
+      };
+      sheet.src = BATTLE_ART.playerSheet;
+    }
   };
   portrait.src = url;
+}
+
+// Animate the actor and target only for the server-confirmed battle event.
+function animateBattleCharacters(event, localId) {
+  if (!localId || ![event.actorId, event.targetId].includes(localId)) return;
+  const actor = document.querySelector(`.fighter-${event.actorId === localId ? 'player' : 'opponent'}`);
+  const target = document.querySelector(`.fighter-${event.targetId === localId ? 'player' : 'opponent'}`);
+  const trigger = (element, name) => {
+    if (!element) return;
+    element.classList.remove(name);
+    void element.offsetWidth; // Restart when two events arrive in quick succession.
+    element.classList.add(name);
+    clearTimeout(element.animationCleanup);
+    element.animationCleanup = setTimeout(() => element.classList.remove(name), 650);
+  };
+  if (event.action === 'attack' || event.action === 'skill') {
+    trigger(actor, 'is-attacking');
+    if (target !== actor) trigger(target, 'is-hit');
+  }
 }
 setBattlePortrait('player', BATTLE_ART.player);
 setBattlePortrait('opponent', BATTLE_ART.opponent);
@@ -121,6 +154,7 @@ function connect() {
       startGame();
       log('เข้าสู่ยุทธภพแล้ว');
     } else if (msg.type === 'battle_fx') {
+      animateBattleCharacters(msg, state.playerId);
       const terminal = msg.actorDead || msg.targetDead || msg.escaped;
       if (terminal) holdBattleForEffect += 1;
       let released = false;
@@ -232,7 +266,14 @@ class WorldScene extends Phaser.Scene {
     if (state.snapshot) this.renderState(state.snapshot);
   }
   update(_time, delta) {
-    for (const item of this.characters.values()) item.channelFx?.update(delta);
+    for (const item of this.characters.values()) {
+      item.channelFx?.update(delta);
+      const moving = this.time.now < (item.movingUntil || 0);
+      for (const { def, sprite } of item.layers) {
+        const anim = `${def.key}-${moving ? 'walk' : 'idle'}`;
+        if (sprite.anims.currentAnim?.key !== anim) sprite.play(anim, true);
+      }
+    }
   }
   renderState(s) {
     if (!this.cameras?.main) return;
@@ -305,10 +346,11 @@ class WorldScene extends Phaser.Scene {
         item.channelFx = p.channel ? createChannelEffect(this, item.container, p.channel) : null;
       }
       const pt=project(p.x,p.y ?? 300), old=this.previous.get(p.id), moving=old && (old.x !== p.x || old.y !== p.y);
+      if (moving) item.movingUntil = this.time.now + 200;
       item.container.setPosition(pt.x,pt.y).setDepth(pt.y*10);
       item.name.setText(p.name + (p.id === state.playerId ? ' · คุณ' : ''));
       item.portrait?.setFlipX(p.facing === -1);
-      for (const { def, sprite } of item.layers) { sprite.setFlipX(p.facing === -1); const anim=`${def.key}-${moving ? 'walk' : 'idle'}`; if(sprite.anims.currentAnim?.key !== anim) sprite.play(anim,true); }
+      for (const { sprite } of item.layers) sprite.setFlipX(p.facing === -1);
       this.previous.set(p.id,{x:p.x,y:p.y});
     }
     for (const [id,item] of this.characters) if(!live.has(id)) { item.channelFx?.destroy();item.container.destroy(true);this.characters.delete(id);this.previous.delete(id); }

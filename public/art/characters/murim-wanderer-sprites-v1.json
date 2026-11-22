@@ -1,0 +1,13 @@
+{
+  "asset": "murim-wanderer-sprites-v1.png",
+  "source": {
+    "kind": "ai-generated",
+    "tool": "OpenAI image generation",
+    "reference": "murim-wanderer-v1.png",
+    "processing": "Removed generated light background, aligned and resampled frames to a fixed grid."
+  },
+  "dimensions": { "width": 512, "height": 256, "frameWidth": 128, "frameHeight": 128, "columns": 4, "rows": 2 },
+  "animations": { "walk": [0, 1, 2, 3], "attack": [4, 5, 6, 7] },
+  "pivot": "bottom center",
+  "technical_checks": { "format": "PNG RGBA", "alpha_min": 0, "alpha_max": 255, "frame_bounds_checked": true, "asset_report_passed": true }
+}
