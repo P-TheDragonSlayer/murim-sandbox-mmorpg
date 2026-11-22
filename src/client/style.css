@@ -46,8 +46,11 @@
 
 /* Keep the original art inside the arena and clear of the opposite status card. */
 .fighter.has-art{width:22%;height:55%;transform:none}
-.fighter-opponent.has-art{right:9%;top:0}
-.fighter-player.has-art{left:8%;bottom:0;transform:scaleX(-1)}
+.fighter-opponent.has-art{right:26%;top:auto;bottom:4%;height:65%}
+.fighter-player.has-art{left:8%;bottom:4%;transform:scaleX(-1)}
+.battle-player-card{width:24%;min-width:0}
+.battle-player-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:360px){.battle-arena{min-height:0}}
 
 /* One four-by-two sheet supplies town walking and battle sword frames. */
 .fighter.has-sheet .fighter-art{display:none}
@@ -62,3 +65,8 @@
 @keyframes fighter-lunge{35%{transform:translateX(-15%) rotate(-6deg)}to{transform:none}}
 @keyframes fighter-hit{25%{filter:brightness(2);translate:8% 0}55%{translate:-3% 0}to{filter:none;translate:0 0}}
 @media (prefers-reduced-motion:reduce){.fighter.is-attacking .fighter-sprite,.fighter.is-attacking .fighter-art,.fighter.is-hit .fighter-sprite,.fighter.is-hit .fighter-art{animation-duration:.01ms}}
+@media (max-width:360px){
+  .opponent-card{font-size:.53rem;line-height:1.05;padding:2px 4px}
+  .opponent-card .battle-label{font-size:.46rem}
+  .fighter-player.has-sheet{height:55%}
+}
