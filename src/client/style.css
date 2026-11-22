@@ -55,7 +55,6 @@
 .battle-values{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:.52rem}
 .topbar-status{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
 .topbar-status .connection{max-width:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.music-toggle{flex:none;min-height:30px;padding:2px 7px;border:1px solid #59665a;border-radius:4px;background:#151c18;color:#d4c19a;font-size:.65rem;white-space:nowrap}
 @media (max-width:360px){.battle-arena{min-height:0}}
 /* Technique choices occupy the same space as the main combat commands. */
 .battle-move-actions button{display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.05;font-size:.59rem}
