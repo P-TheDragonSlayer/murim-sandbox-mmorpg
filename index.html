@@ -23,10 +23,10 @@
             <section id="battle-panel" class="battle-screen" hidden aria-label="ประลองยุทธ์">
               <div class="battle-top"><span>ประลองยุทธ์</span><span id="turn" class="battle-turn">รอ</span></div>
               <div class="battle-arena">
-                <div class="opponent-card"><span class="battle-label">คู่ต่อสู้</span><p id="opponent">กำลังรอคู่ต่อสู้</p></div>
+                <div class="opponent-card"><strong id="opponent">คู่ต่อสู้: —</strong><span id="battle-opponent-hp">ชีวิต: —</span><span id="battle-opponent-qi" hidden></span></div>
                 <div class="fighter fighter-opponent" aria-hidden="true"><i class="fighter-head"></i><i class="fighter-body"></i><i class="fighter-sword"></i></div>
                 <div class="fighter fighter-player" aria-hidden="true"><i class="fighter-head"></i><i class="fighter-body"></i><i class="fighter-sword"></i></div>
-                <div class="battle-player-card"><strong id="battle-player-name">จอมยุทธ์</strong><span id="battle-player-hp">ชีวิต —</span><span id="battle-player-qi">ปราณ —</span></div>
+                <div class="battle-player-card"><strong id="battle-player-name">คุณ: จอมยุทธ์</strong><div class="battle-values"><span id="battle-player-hp">HP —</span><span id="battle-player-qi">ปราณ —</span></div></div>
               </div>
               <div class="battle-bottom"><div id="battle-log" class="battle-log" aria-live="polite">เลือกกระบวนท่า</div><div class="battle-actions"><button data-action="attack">โจมตี</button><button data-action="skill">ใช้ปราณ</button><button data-action="defend">ป้องกัน</button><button data-action="flee">หนี</button></div></div>
               <details class="battle-items"><summary>กระเป๋ายา</summary><div class="battle-actions"><button data-action="item" data-item="potion">ยารักษา</button><button data-action="item" data-item="medicine">ยาบำรุง</button></div></details>

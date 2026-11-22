@@ -182,9 +182,9 @@ function updateInterface() {
   const me = s.players?.find((p) => p.id === state.playerId);
   if (!me) return;
   $('player-name').textContent = me.name;
-  if ($('battle-player-name')) $('battle-player-name').textContent = me.name;
-  if ($('battle-player-hp')) $('battle-player-hp').textContent = `${Math.max(0, me.hp)} / ${me.maxHp}`;
-  if ($('battle-player-qi')) $('battle-player-qi').textContent = `${Math.round(me.qi)} / ${me.qiMax}`;
+  if ($('battle-player-name')) $('battle-player-name').textContent = `คุณ: ${me.name}`;
+  if ($('battle-player-hp')) $('battle-player-hp').textContent = `HP ${Math.max(0, me.hp)}/${me.maxHp}`;
+  if ($('battle-player-qi')) $('battle-player-qi').textContent = `ปราณ ${Math.round(me.qi)}/${me.qiMax}`;
   $('hp').textContent = `${Math.max(0, me.hp)} / ${me.maxHp}`;
   $('qi').textContent = `${Math.round(me.qi)} / ${me.qiMax}`;
   $('hp-bar').style.width = `${Math.max(0, Math.min(100, 100 * me.hp / (me.maxHp || 1)))}%`;
@@ -210,7 +210,11 @@ function updateInterface() {
     const otherId = battle.players.find((id) => id !== me.id);
     const other = s.players.find((p) => p.id === otherId);
     setBattlePortrait('opponent', other?.isDummy ? BATTLE_ART.dummy : BATTLE_ART.opponent);
-    $('opponent').textContent = `คู่ต่อสู้: ${other?.name || 'จอมยุทธ์'} · ชีวิต ${other?.hp ?? '?'} / ${other?.maxHp ?? '?'}`;
+    $('opponent').textContent = `คู่ต่อสู้: ${other?.name || '—'}`;
+    $('battle-opponent-hp').textContent = `ชีวิต: ${other?.hp ?? '—'} / ${other?.maxHp ?? '—'}`;
+    const opponentQi = $('battle-opponent-qi');
+    opponentQi.hidden = other?.qi == null || other?.qiMax == null;
+    if (!opponentQi.hidden) opponentQi.textContent = `ปราณ: ${Math.round(other.qi)} / ${other.qiMax}`;
     document.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = !myTurn; });
     highlightBattleChoice();
     if (typeof battle.log === 'string') log(battle.log);
