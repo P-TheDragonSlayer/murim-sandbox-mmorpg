@@ -34,15 +34,15 @@
   .controller-footer{margin-top:0;gap:4px}
 }
 
-/* Reuse the existing town scene behind combat without baking in UI or effects. */
+/* The battle arena uses the supplied sunset hall scene. */
 .battle-arena {
   background-color: #9a9d80;
-  background-image: linear-gradient(rgba(226, 231, 202, .20), rgba(46, 59, 43, .12)), url('/public/art/backgrounds/murim-town-dusk-concept-v1.png');
+  background-image: url('/public/art/backgrounds/murim-battle-hall-v1.jpg');
   background-position: center center;
   background-size: cover;
   background-repeat: no-repeat;
 }
-.battle-arena:before, .battle-arena:after { background: rgba(45, 63, 46, .52); }
+.battle-arena:before, .battle-arena:after { display: none; }
 
 /* Keep the original art inside the arena and clear of the opposite status card. */
 .fighter.has-art{width:22%;height:55%;transform:none}
