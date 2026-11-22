@@ -305,7 +305,7 @@ function updateInterface() {
   $('qi-bar').style.width = `${Math.max(0, Math.min(100, 100 * me.qi / (me.qiMax || 1)))}%`;
   $('power').textContent = String(Math.round(me.power));
   $('deaths').textContent = String(me.deaths ?? 0);
-  $('area').textContent = me.location === 'world' ? 'แผนที่ยุทธภพ' : typeof me.city === 'string' ? me.city : me.city ? 'เขตเมืองปลอดภัย' : 'นอกเมือง';
+  $('area').textContent = me.location === 'world' ? 'แผนที่ยุทธภพ' : typeof me.city === 'string' ? me.city : me.city ? 'เขตเมือง' : 'นอกเมือง';
   $('inventory').textContent = `ยา ${me.inventory?.potion ?? 0} · ยาบำรุง ${me.inventory?.medicine ?? 0}${me.meridianDamage ? ` · เส้นปราณเสียหาย ${me.meridianDamage}` : ''}`;
   $('items').replaceChildren(...(me.items || []).map((item) => { const p = document.createElement('p'); const history = (item.history || []).map((h) => `${h.event}: ${h.owner || '—'}`).join(' → '); p.textContent = `${item.name} · ${history}`; return p; }));
   const battle = s.battles?.find((b) => b.id === me.combatId);
@@ -351,7 +351,7 @@ function nearWorldTown(me, snapshot) {
 }
 
 class WorldScene extends Phaser.Scene {
-  constructor() { super('world'); this.characters = new Map(); this.corpses = new Map(); this.previous = new Map(); this.mapPlayers = new Map(); }
+  constructor() { super('world'); this.characters = new Map(); this.corpses = new Map(); this.previous = new Map(); this.mapPlayers = new Map(); this.mapCorpses = new Map(); }
   preload() {
     // Complete painted town is a background, not a set of collision objects.
     this.load.image('town-full-scene', '/public/art/backgrounds/murim-town-dusk-concept-v1.png');
@@ -437,9 +437,26 @@ class WorldScene extends Phaser.Scene {
         item.label.setText(p.name + (p.id === state.playerId ? ' · คุณ' : ''));
       });
       for (const [id,item] of this.mapPlayers) if (!liveMap.has(id)) { item.container.destroy(true); this.mapPlayers.delete(id); }
+      const liveCorpses = new Set();
+      for (const corpse of s.corpses || []) {
+        if (corpse.location !== 'world' || (corpse.looted && corpse.qi <= 0) || !Number.isFinite(corpse.mapX) || !Number.isFinite(corpse.mapY)) continue;
+        liveCorpses.add(corpse.id);
+        let marker = this.mapCorpses.get(corpse.id);
+        if (!marker) {
+          const dot = this.add.circle(0,0,7,0xa7352c).setStrokeStyle(2,0xffe2aa);
+          const label = this.add.text(0,10,'',{fontFamily:'sans-serif',fontSize:'13px',color:'#fff',backgroundColor:'#552c24',padding:{x:3,y:1}}).setOrigin(0.5,0);
+          marker = {container:this.add.container(0,0,[dot,label]).setDepth(9500),label};
+          this.mapCorpses.set(corpse.id,marker);
+        }
+        const pt = projectMap(corpse.mapX,corpse.mapY);
+        marker.container.setPosition(pt.x,pt.y).setVisible(true);
+        marker.label.setText(`ศพ ${corpse.ownerName || ''}`);
+      }
+      for (const [id,marker] of this.mapCorpses) if (!liveCorpses.has(id)) { marker.container.destroy(true); this.mapCorpses.delete(id); }
       return;
     }
     for (const item of this.mapPlayers.values()) item.container.setVisible(false);
+    for (const marker of this.mapCorpses.values()) marker.container.setVisible(false);
     if (s.trainingDummy && !this.trainingDummy) {
       const pt=project(s.trainingDummy.x,s.trainingDummy.y);
       const marker=this.textures.exists('world-dummy-v1')
@@ -479,7 +496,7 @@ class WorldScene extends Phaser.Scene {
     }
     for (const [id,item] of this.characters) if(!live.has(id)) { item.channelFx?.destroy();item.container.destroy(true);this.characters.delete(id);this.previous.delete(id); }
     const remains=new Set();
-    for (const corpse of s.corpses || []) if (!corpse.looted || corpse.qi > 0) {
+    for (const corpse of s.corpses || []) if (corpse.location !== 'world' && (!corpse.looted || corpse.qi > 0)) {
       remains.add(corpse.id); let marker=this.corpses.get(corpse.id);
       if(!marker) { marker=this.add.rectangle(0,0,30,11,0x856548).setStrokeStyle(1,0xe1c791);this.corpses.set(corpse.id,marker); }
       const pt=project(corpse.x,corpse.y ?? 300);marker.setPosition(pt.x,pt.y).setDepth(pt.y*10);
@@ -528,10 +545,25 @@ $('respawn').addEventListener('click', () => send({ type: 'respawn' }));
 function nearest(collection) {
   const s = state.snapshot, me = s?.players?.find((p) => p.id === state.playerId);
   if (!me) return null;
-  const distance = (entry) => Math.hypot(entry.x - me.x, (entry.y ?? 300) - (me.y ?? 300));
-  return collection.filter((entry) => entry.id !== me.id && !entry.dead).sort((a, b) => distance(a) - distance(b))[0] || null;
+  const world = me.location === 'world';
+  const samePlace = entry => world ? entry.location === 'world' : entry.location !== 'world';
+  const distance = entry => world ? Math.hypot(entry.mapX - me.mapX, entry.mapY - me.mapY) : Math.hypot(entry.x - me.x, (entry.y ?? 300) - (me.y ?? 300));
+  return collection.filter(entry => entry.id !== me.id && !entry.dead && !entry.isDummy && samePlace(entry) && Number.isFinite(distance(entry))).sort((a, b) => distance(a) - distance(b))[0] || null;
 }
-$('challenge').addEventListener('click', () => { const target = nearest(state.snapshot?.players || []); if (target) send({ type: 'challenge', targetId: target.id }); else log('ไม่พบผู้เล่นคนอื่น'); });
+$('challenge').addEventListener('click', () => {
+  const me = state.snapshot?.players?.find(p => p.id === state.playerId);
+  const target = nearest(state.snapshot?.players || []);
+  let message = '';
+  if (!me || !target) message = 'ไม่พบผู้เล่นคนอื่นในพื้นที่เดียวกัน';
+  else if (target.combatId) message = 'ผู้เล่นใกล้สุดกำลังต่อสู้อยู่';
+  else {
+    const world = me.location === 'world';
+    const d = world ? Math.hypot(target.mapX-me.mapX,target.mapY-me.mapY) : Math.hypot(target.x-me.x,(target.y??300)-(me.y??300));
+    if (d > (world ? 70 : 150)) message = 'ผู้เล่นอยู่ไกลเกินไป เดินเข้าไปใกล้ก่อนท้าสู้';
+  }
+  $('challenge-help').textContent = message || `กำลังท้า ${target.name}`;
+  if (message) log(message); else send({ type: 'challenge', targetId: target.id });
+});
 for (const type of ['loot', 'absorb']) $(type).addEventListener('click', () => { const corpse = nearest((state.snapshot?.corpses || []).filter((c) => type === 'loot' ? !c.looted : c.qi > 0)); if (corpse) send({ type, corpseId: corpse.id }); else log('ไม่พบสิ่งของหรือปราณตกค้าง'); });
 $('control-menu').addEventListener('click', () => setMenu($('menu-overlay').hidden));
 $('menu-close').addEventListener('click', () => setMenu(false));

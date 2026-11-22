@@ -369,3 +369,23 @@ test('server blocks the visible lantern base but permits going around it', {time
     if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
   }
 });
+test('PvP in city and world preserves world loot and absorption', {timeout:20000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-world-pvp-')), dataPath=path.join(dir,'state.json');
+  const f=(id,location,mapX,hp,power)=>({id,name:id,x:350,y:500,location,mapX,mapY:420,hp,maxHp:100,qi:100,qiMax:100,power,dead:false,inventory:{potion:0,medicine:0},items:[{id:'item-'+id,name:'sword',history:[]}]});
+  fs.writeFileSync(dataPath,JSON.stringify({accounts:{a:f('A','town',550,100,100),b:f('B','town',550,10,10),c:f('C','world',100,100,100),d:f('D','world',116,10,10)},corpses:[]}));
+  let proc,a,b,c,d;
+  try {
+    proc=await startServer(port,dataPath);a=await connect(port,'A','a');b=await connect(port,'B','b');c=await connect(port,'C','c');d=await connect(port,'D','d');
+    send(c,{type:'challenge',targetId:'A'});await until(()=>c.errors.length,'reject cross-location');
+    assert.equal(c.state.battles.length,0,'cross-location challenge creates no battle');
+    send(a,{type:'challenge',targetId:'B'});await until(()=>a.state.battles.some(x=>x.players.includes('B')),'city challenge');
+    send(c,{type:'challenge',targetId:'D'});await until(()=>c.state.battles.some(x=>x.players.includes('D')),'world challenge');
+    send(c,{type:'action',action:'attack'});await until(()=>c.state.players.find(x=>x.id==='D')?.dead,'world death');
+    const corpse=c.state.corpses.find(x=>x.ownerName==='D');assert.equal(corpse.location,'world');assert.equal(corpse.mapX,116);
+    send(c,{type:'loot',corpseId:corpse.id});await until(()=>c.state.corpses.find(x=>x.id===corpse.id)?.looted,'world loot');
+    assert.ok(c.state.players.find(x=>x.id==='C').items.some(x=>x.id==='item-D'));
+    send(c,{type:'absorb',corpseId:corpse.id});await until(()=>c.state.players.find(x=>x.id==='C')?.power>100,'world absorb');
+    assert.equal(c.state.corpses.find(x=>x.id===corpse.id).qi,0);
+    const saved=JSON.parse(fs.readFileSync(dataPath,'utf8'));assert.equal(saved.corpses.find(x=>x.id===corpse.id).location,'world');assert.equal(saved.corpses.find(x=>x.id===corpse.id).mapX,116);
+  } finally {for(const x of [a,b,c,d])if(x?.ws.readyState===WebSocket.OPEN)x.ws.close();await stopServer(proc);if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-world-pvp-'))fs.rmSync(dir,{recursive:true,force:true});}
+});

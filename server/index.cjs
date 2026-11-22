@@ -37,9 +37,16 @@ for (const player of Object.values(state.accounts)) {
 }
 // Preserve legacy loot, identity and timestamps while relocating inaccessible corpses.
 for (const corpse of state.corpses) {
-  if (!isWalkable(corpse.x, corpse.y)) Object.assign(corpse, nearestWalkable(corpse.x, corpse.y));
+  if (corpse.location !== 'world' && !isWalkable(corpse.x, corpse.y)) Object.assign(corpse, nearestWalkable(corpse.x, corpse.y));
 }
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const locationOf = p => p.location === 'world' ? 'world' : 'town';
+const locationDistance = (a,b) => {
+  if(locationOf(a)!==locationOf(b))return Infinity;
+  const d=locationOf(a)==='world' ? Math.hypot(a.mapX-b.mapX,a.mapY-b.mapY) : distance(a,b);
+  return Number.isFinite(d) ? d : Infinity;
+};
+const corpseInRange = (c,p) => locationDistance(c,p) <= (locationOf(p)==='world' ? 70 : 100);
 const sockets = new Map(), battles = new Map(), channels = new Map();
 function save() {
   fs.mkdirSync(path.dirname(dataPath), {recursive: true});
@@ -60,7 +67,7 @@ function publicPlayer(p, viewer) {
 }
 function visibleCorpses() {
   const now = Date.now();
-  return state.corpses.map(c=>({id:c.id,x:c.x,y:c.y,ownerName:c.ownerName,qi:c.absorbed?0:Math.floor(computeCorpseQi(c.qiAtDeath,c.createdAt,now)),items:c.items,looted:!c.items.length}));
+  return state.corpses.map(c=>({id:c.id,x:c.x,y:c.y,location:locationOf(c),mapX:c.mapX,mapY:c.mapY,ownerName:c.ownerName,qi:c.absorbed?0:Math.floor(computeCorpseQi(c.qiAtDeath,c.createdAt,now)),items:c.items,looted:!c.items.length}));
 }
 function broadcast() {
   for (const [playerId, ws] of sockets) {
@@ -123,7 +130,7 @@ function kill(victim) {
   victim.bestPower=Math.max(victim.bestPower||0,victim.power||0);
   const items=(victim.items||[]).map(item=>({...item,history:[...(item.history||[]),{event:'dropped',owner:victim.name,at:Date.now()}]}));
   for (const [kind,count] of Object.entries(victim.inventory||{})) for(let i=0;i<count;i++)items.push({id:id(),name:kind==='potion'?'ยารักษา':'ยาบำรุง',kind,history:[{event:'dropped',owner:victim.name,at:Date.now()}]});
-  state.corpses.push({id:id(),x:victim.x,y:victim.y,ownerName:victim.name,qiAtDeath:(victim.power||0),createdAt:Date.now(),items,absorbed:false});
+  state.corpses.push({id:id(),x:victim.x,y:victim.y,location:locationOf(victim),mapX:victim.mapX,mapY:victim.mapY,ownerName:victim.name,qiAtDeath:(victim.power||0),createdAt:Date.now(),items,absorbed:false});
   victim.items=[]; victim.inventory={potion:0,medicine:0};
 }
 function processAction(p, b, action, ws, item, move, rollSuccess, diceResult) {
@@ -153,22 +160,22 @@ function processAction(p, b, action, ws, item, move, rollSuccess, diceResult) {
     else kill(p);
     endBattle(b);
   }
-  else if(r.escaped) { endBattle(b); const nextX=Math.max(0,p.x-100); if(canTraverse(p.x,p.y,nextX,p.y)) p.x=nextX; }
+  else if(r.escaped) { endBattle(b); if(locationOf(p)==='world') p.mapX=Math.max(0,p.mapX-32); else {const nextX=Math.max(0,p.x-100); if(canTraverse(p.x,p.y,nextX,p.y)) p.x=nextX;} }
   else { b.turn=enemy.id; scheduleTurn(b); }
   save(); broadcast();
 }
 function beginChannel(p, kind, corpseId, ws) {
-  if(p.location==='world' || p.dead || p.combatId || channels.has(p.id)) return err(ws,'ไม่สามารถทำได้ในตำแหน่งนี้');
+  if((p.location==='world' && kind!=='absorb') || p.dead || p.combatId || channels.has(p.id)) return err(ws,'ไม่สามารถทำได้ในตำแหน่งนี้');
   let corpse;
   if(kind==='absorb') {
     corpse=state.corpses.find(c=>c.id===corpseId);
-    if(!corpse || corpse.absorbed || distance(corpse,p)>100 || computeCorpseQi(corpse.qiAtDeath,corpse.createdAt,Date.now())<=0) return err(ws,'ไม่พบปราณที่ดูดซับได้ในระยะ');
+    if(!corpse || corpse.absorbed || !corpseInRange(corpse,p) || computeCorpseQi(corpse.qiAtDeath,corpse.createdAt,Date.now())<=0) return err(ws,'ไม่พบปราณที่ดูดซับได้ในระยะ');
   }
   if(kind==='medicine') {if(!p.inventory?.medicine)return err(ws,'ไม่มียาบำรุง');p.inventory.medicine--;save();}
   const timer=setTimeout(()=>{
     const c=channels.get(p.id); if(!c) return;
     channels.delete(p.id);
-    if(corpse && (corpse.absorbed || distance(corpse,p)>100)) { broadcast(); return; }
+    if(corpse && (corpse.absorbed || !corpseInRange(corpse,p))) { broadcast(); return; }
     const amount=corpse?computeCorpseQi(corpse.qiAtDeath,corpse.createdAt,Date.now()):undefined;
     if(corpse && amount<=0){broadcast(); return;}
     const result=resolveChannel({actor:p,kind,interrupted:false,amount});
@@ -232,9 +239,8 @@ function onMessage(ws, raw) {
     case 'challenge': {
       const target=findPlayer(m.targetId);
       if(!target || !sockets.has(target.id) || target.id===p.id || p.dead||target.dead||p.combatId||target.combatId) return err(ws,'ไม่สามารถต่อสู้กับเป้าหมายนี้ได้');
-      if(p.location==='world'||target.location==='world')return err(ws,'ยังไม่สามารถต่อสู้บนแผนที่ได้');
-      if(isCity(p.x)||isCity(target.x))return err(ws,'เขตเมืองปลอดภัย ไม่สามารถเริ่มต่อสู้ได้');
-      if(distance(target,p)>150)return err(ws,'เป้าหมายอยู่ไกลเกินไป');
+      if(locationOf(p)!==locationOf(target))return err(ws,'ผู้เล่นอยู่คนละพื้นที่');
+      if(locationDistance(target,p)>(locationOf(p)==='world'?70:150))return err(ws,'เป้าหมายอยู่ไกลเกินไป');
       cancelChannel(target);cancelChannel(p);
       const b={id:id(),players:[p.id,target.id],turn:p.id,log:`${p.name} เริ่มโจมตี ${target.name}`};
       p.combatId=b.id;target.combatId=b.id;battles.set(b.id,b);save();scheduleTurn(b);broadcast();break;
@@ -288,7 +294,7 @@ function onMessage(ws, raw) {
     case 'absorb':beginChannel(p,'absorb',m.corpseId,ws);break;
     case 'loot': {
       const c=state.corpses.find(c=>c.id===m.corpseId);
-      if(p.location==='world'||p.dead||p.combatId||!c||distance(c,p)>100)return err(ws,'ไม่สามารถเก็บของได้');
+      if(p.dead||p.combatId||!c||!corpseInRange(c,p))return err(ws,'ไม่สามารถเก็บของได้');
       if(!c.items.length)return err(ws,'ไม่มีของให้เก็บ');
       p.items||=[]; for(const item of c.items){if(item.kind==='potion'||item.kind==='medicine')p.inventory[item.kind]=(p.inventory[item.kind]||0)+1;else p.items.push({...item,history:[...(item.history||[]),{event:'looted',owner:p.name,at:Date.now()}]});}c.items=[];save();broadcast();break;
     }
