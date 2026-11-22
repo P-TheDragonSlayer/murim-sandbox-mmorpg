@@ -26,6 +26,7 @@ setBattlePortrait('opponent', BATTLE_ART.opponent);
 const journal = [];
 let scene;
 let townBackgroundReady = false;
+let mapBackgroundReady = false;
 let holdBattleForEffect = 0;
 let battleChoice = 0;
 let previousBattleId = null;
@@ -83,7 +84,8 @@ function selectDirection(dx, dy) {
     highlightBattleChoice();
     return;
   }
-  if (!townBackgroundReady) { log('ไม่สามารถเดินได้: โหลดภาพเมืองไม่สำเร็จ'); return; }
+  const me = state.snapshot?.players?.find(p => p.id === state.playerId);
+  if (me?.location === 'world' ? !mapBackgroundReady : !townBackgroundReady) { log('ไม่สามารถเดินได้: โหลดภาพฉากไม่สำเร็จ'); return; }
   send({type:'move', dx, dy});
 }
 
@@ -155,7 +157,7 @@ function updateInterface() {
   $('qi-bar').style.width = `${Math.max(0, Math.min(100, 100 * me.qi / (me.qiMax || 1)))}%`;
   $('power').textContent = String(Math.round(me.power));
   $('deaths').textContent = String(me.deaths ?? 0);
-  $('area').textContent = typeof me.city === 'string' ? me.city : me.city ? 'เขตเมืองปลอดภัย' : 'นอกเมือง';
+  $('area').textContent = me.location === 'world' ? 'แผนที่ยุทธภพ' : typeof me.city === 'string' ? me.city : me.city ? 'เขตเมืองปลอดภัย' : 'นอกเมือง';
   $('inventory').textContent = `ยา ${me.inventory?.potion ?? 0} · ยาบำรุง ${me.inventory?.medicine ?? 0}${me.meridianDamage ? ` · เส้นปราณเสียหาย ${me.meridianDamage}` : ''}`;
   $('items').replaceChildren(...(me.items || []).map((item) => { const p = document.createElement('p'); const history = (item.history || []).map((h) => `${h.event}: ${h.owner || '—'}`).join(' → '); p.textContent = `${item.name} · ${history}`; return p; }));
   const battle = s.battles?.find((b) => b.id === me.combatId);
@@ -167,7 +169,7 @@ function updateInterface() {
   if (!battle && holdBattleForEffect) document.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = true; });
   $('world-actions').hidden = !!battle || me.dead;
   $('dead-panel').hidden = !me.dead;
-  $('mode').textContent = me.dead ? 'สิ้นชีวิต' : battle ? 'กำลังต่อสู้' : 'เดินทาง';
+  $('mode').textContent = me.dead ? 'สิ้นชีวิต' : battle ? 'กำลังต่อสู้' : me.location === 'world' ? (nearWorldTown(me, s) ? 'กด A เข้าเมือง' : 'จุดเขียวคือผู้เดินทาง') : 'เดินทาง';
   if (battle) {
     const myTurn = battle.turn === me.id;
     $('turn').textContent = myTurn ? 'ตาของคุณ' : 'รอคู่ต่อสู้';
@@ -184,12 +186,18 @@ function updateInterface() {
 
 // The server owns the 1600×600 plane. Map its feet coordinates to the fixed 960×540 scene.
 const project = (x, y) => ({ x: x * 0.6, y: y * 0.9 });
+const projectMap = (x, y) => ({ x: x * 0.96, y: y * 0.54 });
+function nearWorldTown(me, snapshot) {
+  const town = snapshot?.worldTown;
+  return !!town && me?.location === 'world' && Math.hypot(me.mapX - town.x, me.mapY - town.y) <= town.radius;
+}
 
 class WorldScene extends Phaser.Scene {
-  constructor() { super('world'); this.characters = new Map(); this.corpses = new Map(); this.previous = new Map(); }
+  constructor() { super('world'); this.characters = new Map(); this.corpses = new Map(); this.previous = new Map(); this.mapPlayers = new Map(); }
   preload() {
     // Complete painted town is a background, not a set of collision objects.
     this.load.image('town-full-scene', '/public/art/backgrounds/murim-town-dusk-concept-v1.png');
+    this.load.image('overworld-map', '/public/art/maps/murim-overworld-v1.jpg');
     this.load.image('world-player-v1', WORLD_ART.player);
     this.load.image('world-dummy-v1', WORLD_ART.dummy);
     for (const layer of CHARACTER_LAYERS) if (layer.url) this.load.spritesheet(layer.key, layer.url, { frameWidth: layer.frameWidth, frameHeight: layer.frameHeight });
@@ -199,12 +207,23 @@ class WorldScene extends Phaser.Scene {
     // This static picture and the server's walkable area share the same screen coordinates.
     townBackgroundReady = this.textures.exists('town-full-scene');
     if (townBackgroundReady) {
-      this.add.image(0, 0, 'town-full-scene').setOrigin(0).setDisplaySize(960, 540).setDepth(-10000);
+      this.townImage = this.add.image(0, 0, 'town-full-scene').setOrigin(0).setDisplaySize(960, 540).setDepth(-10000);
     } else {
       this.add.rectangle(0, 0, 960, 540, 0x16211b).setOrigin(0).setDepth(-10000);
       this.add.text(480, 270, 'โหลดภาพเมืองไม่สำเร็จ\nไม่สามารถเดินได้ กรุณารีเฟรช', { fontFamily:'sans-serif', fontSize:'28px', color:'#fff3d4', align:'center', backgroundColor:'#16211b', padding:{x:20,y:16} }).setOrigin(0.5).setDepth(99999);
       log('ไม่สามารถโหลดภาพเมืองได้');
     }
+    mapBackgroundReady = this.textures.exists('overworld-map');
+    if (mapBackgroundReady) this.mapImage = this.add.image(0, 0, 'overworld-map').setOrigin(0).setDisplaySize(960, 540).setDepth(-9999).setVisible(false);
+    this.mapMissing = this.add.text(480, 270, 'โหลดแผนที่ไม่สำเร็จ กรุณารีเฟรช', { fontFamily:'sans-serif', fontSize:'28px', color:'#fff3d4', backgroundColor:'#16211b', padding:{x:20,y:16} }).setOrigin(0.5).setDepth(10000).setVisible(false);
+    this.townGateCue = this.add.container(0,0,[
+      this.add.ellipse(0,0,90,28,0xffdb83,0.16).setStrokeStyle(3,0xffdf92,0.9),
+      this.add.text(0,-38,'ทางออกสู่แผนที่', {fontFamily:'sans-serif',fontSize:'15px',color:'#fff5d7',backgroundColor:'#30362d',padding:{x:5,y:3}}).setOrigin(0.5)
+    ]).setDepth(9500).setVisible(false);
+    this.worldTownCue = this.add.container(0,0,[
+      this.add.circle(0,0,18,0xffe8a1,0.12).setStrokeStyle(2,0xfff0b2),
+      this.add.text(0,24,'เมือง · กด A', {fontFamily:'sans-serif',fontSize:'15px',color:'#fff8dc',backgroundColor:'#34382e',padding:{x:5,y:3}}).setOrigin(0.5,0)
+    ]).setDepth(9000).setVisible(false);
     for (const layer of CHARACTER_LAYERS) if (layer.url && this.textures.exists(layer.key)) {
       for (const [name, spec] of Object.entries(CHARACTER_ANIMATIONS)) {
         this.anims.create({ key: `${layer.key}-${name}`, frames: this.anims.generateFrameNumbers(layer.key, { start: spec.start, end: spec.end }), frameRate: spec.frameRate, repeat: -1 });
@@ -218,6 +237,44 @@ class WorldScene extends Phaser.Scene {
   renderState(s) {
     if (!this.cameras?.main) return;
     // Camera remains fixed so the whole painted scene is visible to every player.
+    const me = s.players?.find(p => p.id === state.playerId);
+    const onMap = me?.location === 'world';
+    this.townImage?.setVisible(!onMap);
+    this.mapImage?.setVisible(onMap);
+    this.mapMissing.setVisible(onMap && !mapBackgroundReady);
+    if (s.townGate) { const gate = project(s.townGate.x, s.townGate.y); this.townGateCue.setPosition(gate.x, gate.y); }
+    this.townGateCue.setVisible(!onMap && !!s.townGate);
+    if (s.worldTown) { const town = projectMap(s.worldTown.x, s.worldTown.y); this.worldTownCue.setPosition(town.x, town.y); }
+    this.worldTownCue.setVisible(onMap && !!s.worldTown);
+    this.trainingDummy?.setVisible(!onMap);
+    for (const item of this.characters.values()) item.container.setVisible(!onMap);
+    for (const marker of this.corpses.values()) marker.setVisible(!onMap);
+    if (onMap) {
+      const travelers = (s.players || []).filter(p => p.location === 'world' && !p.dead && !p.isDummy && Number.isFinite(p.mapX) && Number.isFinite(p.mapY)).sort((a,b) => a.id.localeCompare(b.id));
+      const groups = new Map();
+      for (const p of travelers) { const key = `${p.mapX},${p.mapY}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(p); }
+      const liveMap = new Set();
+      for (const group of groups.values()) group.forEach((p, index) => {
+        liveMap.add(p.id);
+        let item = this.mapPlayers.get(p.id);
+        if (!item) {
+          const own = p.id === state.playerId;
+          const dot = this.add.circle(0,0,own ? 9 : 7,0x35d763).setStrokeStyle(own ? 3 : 2,own ? 0xffe27b : 0xeaffdc);
+          const label = this.add.text(0,-16,'',{fontFamily:'sans-serif',fontSize:'13px',color:'#fff',backgroundColor:'#193526',padding:{x:3,y:1}}).setOrigin(0.5,1);
+          const container = this.add.container(0,0,[dot,label]).setDepth(9501);
+          item = {container,label}; this.mapPlayers.set(p.id,item);
+        }
+        const pt = projectMap(p.mapX,p.mapY);
+        const angle = 2 * Math.PI * index / group.length;
+        const offset = group.length > 1 ? Math.min(25, 8 + group.length * 2) : 0;
+        item.container.setPosition(Phaser.Math.Clamp(pt.x + Math.cos(angle)*offset,12,948),Phaser.Math.Clamp(pt.y + Math.sin(angle)*offset,20,520)).setVisible(true);
+        item.label.setPosition(0, -16 - (group.length > 1 ? index * 18 : 0));
+        item.label.setText(p.name + (p.id === state.playerId ? ' · คุณ' : ''));
+      });
+      for (const [id,item] of this.mapPlayers) if (!liveMap.has(id)) { item.container.destroy(true); this.mapPlayers.delete(id); }
+      return;
+    }
+    for (const item of this.mapPlayers.values()) item.container.setVisible(false);
     if (s.trainingDummy && !this.trainingDummy) {
       const pt=project(s.trainingDummy.x,s.trainingDummy.y);
       const marker=this.textures.exists('world-dummy-v1')
@@ -228,7 +285,7 @@ class WorldScene extends Phaser.Scene {
     }
     const live = new Set();
     for (const p of s.players || []) {
-      if (p.dead || p.isDummy) continue;
+      if (p.dead || p.isDummy || p.location === 'world') continue;
       live.add(p.id);
       let item = this.characters.get(p.id);
       if (!item) {
@@ -294,7 +351,11 @@ $('control-a').addEventListener('click', () => {
     if (selected && $('menu-overlay').contains(selected) && selected.matches('button, summary')) selected.click();
   } else if (!$('battle-panel').hidden) {
     battleButtons()[battleChoice]?.click();
-  } else setMenu(true);
+  } else {
+    const me = state.snapshot?.players?.find(p => p.id === state.playerId);
+    if (nearWorldTown(me, state.snapshot)) send({type:'enter_town'});
+    else setMenu(true);
+  }
 });
 $('control-b').addEventListener('click', () => {
   if (!$('menu-overlay').hidden) return setMenu(false);

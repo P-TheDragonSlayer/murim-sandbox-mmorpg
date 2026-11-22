@@ -13,6 +13,11 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const WIDTH = 1600, HEIGHT = 600, LEGACY_Y = 300, TURNS_MS = 30000, CHANNEL_MS = 5000;
 const DEFAULT_SPAWN = SPAWNS[1];
+// World map coordinates are normalized to a 1000 x 1000 canvas.
+const WORLD_TOWN = Object.freeze({x:550,y:420,radius:70});
+const TOWN_GATE = Object.freeze({x:1280,y:250});
+const TOWN_GATE_EXIT = Object.freeze({x:1180,y:320});
+const inTownGate = (x,y) => x>=1200 && x<=1420 && y>=200 && y<=310;
 // Shared landmark; each player gets an independent, non-persistent practice opponent.
 const TRAINING_DUMMY = Object.freeze({id:'training-dummy',name:'หุ่นฝึก',x:470,y:500});
 const isCity = x => x < 180 || (x >= 300 && x <= 400) || (x >= 600 && x <= 700);
@@ -25,7 +30,10 @@ for (const entity of [...Object.values(state.accounts), ...state.corpses]) {
 }
 // Old positions outside the newly authored plaza return to a safe city spawn.
 for (const player of Object.values(state.accounts)) {
-  if (!player.dead && !isWalkable(player.x, player.y)) Object.assign(player, DEFAULT_SPAWN);
+  if (player.location !== 'world') player.location='town';
+  if (!Number.isInteger(player.mapX) || player.mapX<0 || player.mapX>1000) player.mapX=WORLD_TOWN.x;
+  if (!Number.isInteger(player.mapY) || player.mapY<0 || player.mapY>1000) player.mapY=WORLD_TOWN.y;
+  if (player.location==='town' && !player.dead && !isWalkable(player.x, player.y)) Object.assign(player, DEFAULT_SPAWN);
 }
 // Preserve legacy loot, identity and timestamps while relocating inaccessible corpses.
 for (const corpse of state.corpses) {
@@ -44,7 +52,8 @@ function send(ws, data) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.str
 function publicPlayer(p, viewer) {
   return {id:p.id, name:p.name, x:p.x, y:p.y, hp:p.hp, maxHp:p.maxHp, qi:p.id===viewer.id?p.qi:undefined,
     qiMax:p.id===viewer.id?p.qiMax:undefined, power:p.id===viewer.id || viewer.power>=p.power ? p.power : null,
-    dead:p.dead, city:isCity(p.x), inventory:p.id===viewer.id?p.inventory:undefined, combatId:p.combatId||null,
+    location:p.location==='world'?'world':'town', mapX:p.mapX, mapY:p.mapY,
+    dead:p.dead, city:p.location!=='world' && isCity(p.x), inventory:p.id===viewer.id?p.inventory:undefined, combatId:p.combatId||null,
     deaths:p.deaths||0, facing:p.facing||1, meridianDamage:p.meridianDamage||0,
     channel:channels.has(p.id) ? channels.get(p.id).kind : null, items:p.id===viewer.id?p.items:undefined,
     isDummy:!!p.isDummy};
@@ -60,7 +69,7 @@ function broadcast() {
     const players=Object.values(state.accounts).filter(a=>sockets.has(a.id) || a.id===p.id).map(a=>publicPlayer(a,p));
     const practice=battles.get(p.combatId);
     if(practice?.dummy) players.push(publicPlayer(practice.dummy,p));
-    send(ws, {type:'state', you:p.id, players, trainingDummy:TRAINING_DUMMY, battles:[...battles.values()].map(b=>({id:b.id,players:b.players,turn:b.turn,log:b.log})),corpses:visibleCorpses()});
+    send(ws, {type:'state', you:p.id, players, townGate:TOWN_GATE, worldTown:WORLD_TOWN, trainingDummy:TRAINING_DUMMY, battles:[...battles.values()].map(b=>({id:b.id,players:b.players,turn:b.turn,log:b.log})),corpses:visibleCorpses()});
   }
 }
 function err(ws, message) { send(ws, {type:'error',message}); }
@@ -141,7 +150,7 @@ function processAction(p, b, action, ws, item) {
   save(); broadcast();
 }
 function beginChannel(p, kind, corpseId, ws) {
-  if(p.dead || p.combatId || channels.has(p.id)) return err(ws,'กำลังต่อสู้หรือไม่สามารถเริ่มได้');
+  if(p.location==='world' || p.dead || p.combatId || channels.has(p.id)) return err(ws,'ไม่สามารถทำได้ในตำแหน่งนี้');
   let corpse;
   if(kind==='absorb') {
     corpse=state.corpses.find(c=>c.id===corpseId);
@@ -169,7 +178,7 @@ function onMessage(ws, raw) {
     let p=state.accounts[token];
     if(!p) {
       const name=String(m.name||'จอมยุทธ์').trim().slice(0,24)||'จอมยุทธ์';
-      p={...createFighter({id:id(),name}),x:DEFAULT_SPAWN.x,y:DEFAULT_SPAWN.y,facing:1,deaths:0,bestPower:0,items:[{id:id(),name:'กระบี่ฝึก',history:[{event:'created',owner:name,at:Date.now()}]}]};
+      p={...createFighter({id:id(),name}),x:DEFAULT_SPAWN.x,y:DEFAULT_SPAWN.y,location:'town',mapX:WORLD_TOWN.x,mapY:WORLD_TOWN.y,facing:1,deaths:0,bestPower:0,items:[{id:id(),name:'กระบี่ฝึก',history:[{event:'created',owner:name,at:Date.now()}]}]};
       state.accounts[token]=p; save();
     }
     const old=sockets.get(p.id);
@@ -179,7 +188,7 @@ function onMessage(ws, raw) {
     if(old && old!==ws) {
       cancelChannel(p,false);
       if(p.combatId) endBattle(battles.get(p.combatId));
-      if(!p.dead) Object.assign(p,DEFAULT_SPAWN);
+      if(!p.dead) Object.assign(p,DEFAULT_SPAWN,{location:'town'});
       old.close();
     }
     sockets.set(p.id,ws); ws.playerId=p.id;
@@ -194,16 +203,28 @@ function onMessage(ws, raw) {
       if (dx === undefined && dy === undefined) { dx=m.direction; dy=0; }
       if (!Number.isInteger(dx) || !Number.isInteger(dy) || Math.abs(dx)+Math.abs(dy)!==1) return;
       if(Date.now()-(ws.lastMove||0)<80)return; ws.lastMove=Date.now();
+      if(p.location==='world') {
+        p.mapX=Math.max(0,Math.min(1000,p.mapX+dx*16));
+        p.mapY=Math.max(0,Math.min(1000,p.mapY+dy*16));
+        save();broadcast();break;
+      }
       const nx=Math.max(0,Math.min(WIDTH,p.x+dx*24));
       const ny=Math.max(0,Math.min(HEIGHT,p.y+dy*24));
       if (!canTraverse(p.x,p.y,nx,ny)) return;
       p.x=nx; p.y=ny;
       if(dx) p.facing=dx;
+      if(inTownGate(p.x,p.y)) {p.location='world';send(ws,{type:'notice',message:'ออกจากเมืองสู่แผนที่ยุทธภพ'});}
       save();broadcast(); break;
+    }
+    case 'enter_town': {
+      if(p.location!=='world'||p.dead||p.combatId||channels.has(p.id)) return err(ws,'ไม่สามารถเข้าเมืองได้ขณะนี้');
+      if(Math.hypot(p.mapX-WORLD_TOWN.x,p.mapY-WORLD_TOWN.y)>WORLD_TOWN.radius) return err(ws,'เข้าใกล้เมืองเริ่มต้นก่อน');
+      Object.assign(p,TOWN_GATE_EXIT,{location:'town'});save();send(ws,{type:'notice',message:'เข้าสู่เมืองเริ่มต้น'});broadcast();break;
     }
     case 'challenge': {
       const target=findPlayer(m.targetId);
       if(!target || !sockets.has(target.id) || target.id===p.id || p.dead||target.dead||p.combatId||target.combatId) return err(ws,'ไม่สามารถต่อสู้กับเป้าหมายนี้ได้');
+      if(p.location==='world'||target.location==='world')return err(ws,'ยังไม่สามารถต่อสู้บนแผนที่ได้');
       if(isCity(p.x)||isCity(target.x))return err(ws,'เขตเมืองปลอดภัย ไม่สามารถเริ่มต่อสู้ได้');
       if(distance(target,p)>150)return err(ws,'เป้าหมายอยู่ไกลเกินไป');
       cancelChannel(target);cancelChannel(p);
@@ -211,7 +232,7 @@ function onMessage(ws, raw) {
       p.combatId=b.id;target.combatId=b.id;battles.set(b.id,b);save();scheduleTurn(b);broadcast();break;
     }
     case 'practice': {
-      if(p.dead||p.combatId||channels.has(p.id)) return err(ws,'ไม่สามารถเริ่มฝึกได้ขณะนี้');
+      if(p.location==='world'||p.dead||p.combatId||channels.has(p.id)) return err(ws,'ไม่สามารถเริ่มฝึกได้ขณะนี้');
       if(distance(p,TRAINING_DUMMY)>150) return err(ws,'เข้าใกล้หุ่นฝึกก่อนเริ่มฝึก');
       const dummy=createFighter({id:'dummy-'+id(),name:TRAINING_DUMMY.name,x:TRAINING_DUMMY.x,y:TRAINING_DUMMY.y,isDummy:true});
       const b={id:id(),players:[p.id,dummy.id],turn:p.id,log:'เริ่มฝึกกับหุ่น: ไม่มีของตกหรือรางวัลปราณ',dummy};
@@ -223,7 +244,7 @@ function onMessage(ws, raw) {
     case 'absorb':beginChannel(p,'absorb',m.corpseId,ws);break;
     case 'loot': {
       const c=state.corpses.find(c=>c.id===m.corpseId);
-      if(p.dead||p.combatId||!c||distance(c,p)>100)return err(ws,'ไม่สามารถเก็บของได้');
+      if(p.location==='world'||p.dead||p.combatId||!c||distance(c,p)>100)return err(ws,'ไม่สามารถเก็บของได้');
       if(!c.items.length)return err(ws,'ไม่มีของให้เก็บ');
       p.items||=[]; for(const item of c.items){if(item.kind==='potion'||item.kind==='medicine')p.inventory[item.kind]=(p.inventory[item.kind]||0)+1;else p.items.push({...item,history:[...(item.history||[]),{event:'looted',owner:p.name,at:Date.now()}]});}c.items=[];save();broadcast();break;
     }
@@ -231,12 +252,12 @@ function onMessage(ws, raw) {
       if(!p.dead)return err(ws,'ตัวละครยังมีชีวิตอยู่');
       const oldId=p.id, n=createFighter({id:id(),name:p.name});const deaths=p.deaths,bestPower=p.bestPower;
       sockets.delete(oldId);ws.playerId=n.id;sockets.set(n.id,ws);
-      Object.assign(p,n,{deathHandled:false,...SPAWNS[crypto.randomInt(SPAWNS.length)],facing:1,deaths,bestPower,combatId:null,items:[{id:id(),name:'กระบี่ฝึก',history:[{event:'created',owner:p.name,at:Date.now()}]}]});
+      Object.assign(p,n,{deathHandled:false,...SPAWNS[crypto.randomInt(SPAWNS.length)],location:'town',facing:1,deaths,bestPower,combatId:null,items:[{id:id(),name:'กระบี่ฝึก',history:[{event:'created',owner:p.name,at:Date.now()}]}]});
       save();send(ws,{type:'reborn',playerId:p.id});broadcast();break;
     }
   }
 }
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png','.svg':'image/svg+xml'};
+const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml'};
 const server=http.createServer((req,res)=>{
   let url;try{url=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.writeHead(400).end();return;}
   if(url==='/')url='/index.html';
@@ -264,7 +285,7 @@ wss.on('connection', ws=>{
   ws.on('close',()=>{
     const p=findPlayer(ws.playerId);if(!p||sockets.get(p.id)!==ws)return;
     sockets.delete(p.id);cancelChannel(p,false);if(p.combatId)endBattle(battles.get(p.combatId));
-    if(!p.dead) Object.assign(p,DEFAULT_SPAWN);save();broadcast();
+    if(!p.dead) Object.assign(p,DEFAULT_SPAWN,{location:'town'});save();broadcast();
   });
 });
 server.listen(PORT,HOST,()=>console.log(`Murim prototype http://${HOST}:${PORT} (prototype token authentication)`));

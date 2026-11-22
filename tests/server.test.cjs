@@ -23,6 +23,41 @@ async function connect(port,name,token) {
   await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject)});send(c,{type:'join',name,token});await until(()=>c.welcome&&c.state,'join');return c;
 }
 function send(c,m){c.ws.send(JSON.stringify(m));}
+test('shared world positions, gate transitions, combat isolation and safe reconnect', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  const fighter=(id)=>({id,name:id,x:1180,y:300,hp:100,maxHp:100,qi:100,qiMax:100,power:10,dead:false,inventory:{potion:2,medicine:1},items:[]});
+  fs.writeFileSync(dataPath,JSON.stringify({accounts:{tokenA:fighter('A'),tokenB:fighter('B')},corpses:[]}));
+  let proc,a,b,reconnected;
+  try {
+    proc=await startServer(port,dataPath);a=await connect(port,'ignored','tokenA');b=await connect(port,'ignored','tokenB');
+    assert.deepEqual(a.state.townGate,{x:1280,y:250});assert.deepEqual(a.state.worldTown,{x:550,y:420,radius:70});
+    send(a,{type:'move',dx:1,dy:0});send(b,{type:'move',dx:1,dy:0});
+    await until(()=>a.state.players.find(p=>p.id==='A')?.location==='world'&&a.state.players.find(p=>p.id==='B')?.location==='world','both enter world');
+    assert.equal(a.state.players.find(p=>p.id==='A').mapX,550);
+    await delay(100);
+    for(let i=0;i<6;i++){send(a,{type:'move',dx:-1,dy:0});await delay(100)}
+    await until(()=>b.state.players.find(p=>p.id==='A')?.mapX===454,'other player sees movement');
+    send(a,{type:'enter_town'});await until(()=>a.errors.length===1,'reject remote town entry');
+    send(a,{type:'challenge',targetId:'B'});await until(()=>a.errors.length===2,'reject world combat');
+    send(a,{type:'practice'});await until(()=>a.errors.length===3,'reject world practice');
+    assert.equal(a.state.battles.length,0);
+    for(let i=0;i<6;i++){send(a,{type:'move',dx:1,dy:0});await delay(100)}
+    await until(()=>a.state.players.find(p=>p.id==='A')?.mapX===550,'return to town marker');
+    send(a,{type:'enter_town'});await until(()=>a.state.players.find(p=>p.id==='A')?.location==='town','enter town');
+    assert.equal(a.state.players.find(p=>p.id==='A').x,1180);assert.equal(a.state.players.find(p=>p.id==='A').y,320);
+    send(a,{type:'move',dx:0,dy:1});await until(()=>a.state.players.find(p=>p.id==='A')?.y===344,'move safely away from gate');
+    assert.equal(a.state.players.find(p=>p.id==='A').location,'town');
+    send(b,{type:'move',dx:1,dy:0});await until(()=>b.state.players.find(p=>p.id==='B')?.mapX===566,'second player moves');
+    const closed=new Promise(resolve=>b.ws.once('close',resolve));b.ws.close();await closed;
+    await until(()=>!a.state.players.some(p=>p.id==='B'),'disconnect propagated');
+    reconnected=await connect(port,'ignored','tokenB');
+    const restored=reconnected.state.players.find(p=>p.id==='B');
+    assert.equal(restored.location,'town');assert.equal(restored.x,350);assert.equal(restored.y,500);assert.equal(restored.mapX,566);
+  } finally {
+    for(const c of [a,b,reconnected])if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
 test('independent, repeatable dummy practice is nonlethal and creates no loot', {timeout:30000}, async()=>{
   const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
   let proc,a,b;
