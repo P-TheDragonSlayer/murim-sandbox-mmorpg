@@ -23,6 +23,31 @@ async function connect(port,name,token) {
   await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject)});send(c,{type:'join',name,token});await until(()=>c.welcome&&c.state,'join');return c;
 }
 function send(c,m){c.ws.send(JSON.stringify(m));}
+test('move catalog and server validate selected moves without consuming a turn', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  fs.writeFileSync(dataPath,JSON.stringify({accounts:{tokenA:{id:'A',name:'A',x:450,y:500,hp:100,maxHp:100,qi:5,qiMax:100,power:10,dead:false,inventory:{potion:2,medicine:1},items:[]}},corpses:[]}));
+  let proc,a;
+  try {
+    proc=await startServer(port,dataPath);
+    const response=await fetch(`http://127.0.0.1:${port}/shared/combat-moves.json`);
+    assert.equal(response.status,200);assert.equal((await response.json()).guard_qi.cost,10);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/shared/rules.cjs`)).status,404);
+    a=await connect(port,'ignored','tokenA');send(a,{type:'practice'});
+    await until(()=>a.state.battles.length===1,'practice begins');
+    send(a,{type:'action',action:'defend',move:'guard_qi'});await until(()=>a.errors.length===1,'reject guard without qi');
+    assert.equal(a.state.battles[0].turn,'A');assert.equal(a.state.players.find(p=>p.id==='A').qi,5);
+    send(a,{type:'action',action:'attack',move:'qi_wave'});await until(()=>a.errors.length===2,'reject wrong category');
+    send(a,{type:'action',action:'attack',move:{toString:null,valueOf:null}});await until(()=>a.errors.length===3,'reject non-string move');
+    assert.equal(a.errors[2],'กระบวนท่าไม่ถูกต้อง');
+    assert.equal(a.state.battles[0].turn,'A');assert.equal(a.effects.length,0);
+    send(a,{type:'action',action:'attack',move:'slash'});await until(()=>a.effects.length===1,'accepted move effect');
+    assert.equal(a.effects[0].move,'slash');
+    await until(()=>a.state.players.find(p=>p.isDummy)?.hp===90,'dummy damaged');
+  } finally {
+    if(a?.ws.readyState===WebSocket.OPEN)a.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
 test('shared world positions, gate transitions, combat isolation and safe reconnect', {timeout:15000}, async()=>{
   const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
   const fighter=(id)=>({id,name:id,x:1180,y:300,hp:100,maxHp:100,qi:100,qiMax:100,power:10,dead:false,inventory:{potion:2,medicine:1},items:[]});

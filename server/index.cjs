@@ -87,7 +87,7 @@ function endBattle(b) {
 }
 function sendBattleEffect(b, p, enemy, action, item, result) {
   const effect = {type:'battle_fx',id:id(),battleId:b.id,actorId:p.id,targetId:enemy.id,
-    action,item:action==='item'?(item||'potion'):null,escaped:!!result.escaped,
+    action,move:result.move||null,hit:result.hit??null,item:action==='item'?(item||'potion'):null,escaped:!!result.escaped,
     actorDead:p.hp<=0,targetDead:enemy.hp<=0};
   for (const participant of b.players) {
     const participantSocket=sockets.get(participant);
@@ -123,12 +123,12 @@ function kill(victim) {
   state.corpses.push({id:id(),x:victim.x,y:victim.y,ownerName:victim.name,qiAtDeath:(victim.power||0),createdAt:Date.now(),items,absorbed:false});
   victim.items=[]; victim.inventory={potion:0,medicine:0};
 }
-function processAction(p, b, action, ws, item) {
+function processAction(p, b, action, ws, item, move) {
   if (b.turn!==p.id) return err(ws,'ยังไม่ถึงเทิร์นของคุณ');
   const enemy=findCombatant(b,b.players.find(i=>i!==p.id)); if(!enemy) return;
   const allowed=['attack','skill','item','defend','flee']; if(!allowed.includes(action)) return err(ws,'คำสั่งไม่ถูกต้อง');
   if(action==='item' && item!==undefined && !['potion','medicine'].includes(item))return err(ws,'ไอเทมไม่ถูกต้อง');
-  const r=resolveAction({actor:p,target:enemy,action:{type:action,item:item||'potion'}});
+  const r=resolveAction({actor:p,target:enemy,action:{type:action,item:item||'potion',move}});
   if(!r.ok) return err(ws, r.log || 'ใช้คำสั่งไม่ได้');
   Object.assign(p,r.actor); Object.assign(enemy,r.target); b.log=String(r.log || '');
   // Presentation events are sent only after an action is accepted. They are not part
@@ -238,7 +238,7 @@ function onMessage(ws, raw) {
       const b={id:id(),players:[p.id,dummy.id],turn:p.id,log:'เริ่มฝึกกับหุ่น: ไม่มีของตกหรือรางวัลปราณ',dummy};
       p.combatId=b.id;battles.set(b.id,b);save();scheduleTurn(b);broadcast();break;
     }
-    case 'action': {const b=battles.get(p.combatId);if(!b)return err(ws,'ไม่ได้อยู่ในการต่อสู้');processAction(p,b,m.action,ws,m.item);break;}
+    case 'action': {const b=battles.get(p.combatId);if(!b)return err(ws,'ไม่ได้อยู่ในการต่อสู้');processAction(p,b,m.action,ws,m.item,m.move);break;}
     case 'meditate': beginChannel(p,'meditate',null,ws);break;
     case 'heal': beginChannel(p,'medicine',null,ws);break;
     case 'absorb':beginChannel(p,'absorb',m.corpseId,ws);break;
@@ -266,7 +266,7 @@ const server=http.createServer((req,res)=>{
   if (url.includes('\0')) { res.writeHead(404).end(); return; }
   const file=path.resolve(root,'.'+url);
   const relative=path.relative(root,file).split(path.sep).join('/');
-  const allowed=relative==='index.html'||relative.startsWith('src/')||relative.startsWith('assets/')||relative.startsWith('public/')||relative.startsWith('node_modules/phaser/dist/');
+  const allowed=relative==='index.html'||relative==='shared/combat-moves.json'||relative.startsWith('src/')||relative.startsWith('assets/')||relative.startsWith('public/')||relative.startsWith('node_modules/phaser/dist/');
   if(!allowed||!file.startsWith(root+path.sep)){res.writeHead(404).end();return;}
   fs.readFile(file,(e,data)=>{if(e){res.writeHead(404).end();return;}res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-store'});res.end(data);});
 });

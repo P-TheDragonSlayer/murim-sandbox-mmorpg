@@ -1,5 +1,8 @@
 'use strict';
 
+const COMBAT_MOVES = require('./combat-moves.json');
+const DEFAULT_MOVES = {attack:'slash', skill:'qi_strike', defend:'guard_technique'};
+
 // Prototype tuning; authoritative server validates turn order and persists outcomes.
 const MAX_MERIDIAN_DAMAGE = 80;
 const n = (value, fallback) => Number.isFinite(value) ? value : fallback;
@@ -17,6 +20,7 @@ function createFighter(input = {}) {
     power: Math.max(1, n(input.power, 10)), dead: Boolean(input.dead) || hp <= 0,
     inventory: { potion: Math.max(0, n(input.inventory?.potion, 2)), medicine: Math.max(0, n(input.inventory?.medicine, 1)) },
     meridianDamage: injury, defending: Boolean(input.defending),
+    defenseType: input.defending && ['attack','skill','all'].includes(input.defenseType) ? input.defenseType : 'all',
     poison: Math.max(0, Math.floor(n(input.poison, 0))),
     cultivation: Math.max(0, n(input.cultivation, 0)),
   };
@@ -38,18 +42,27 @@ function resolveAction({ actor: input, target: opponent, action = {}, rng = Math
   const type = action.type;
   if (!['attack', 'skill', 'defend', 'flee', 'item'].includes(type)) return { ...out, log: 'คำสั่งไม่ถูกต้อง' };
   if (['attack', 'skill'].includes(type) && (!target || target.dead || actor.id === target.id)) return { ...out, log: 'เป้าหมายไม่ถูกต้อง' };
-  if (type === 'skill' && actor.qi < 20) return { ...out, log: 'ปราณไม่พอ' };
+  let move, moveId;
+  if (['attack', 'skill', 'defend'].includes(type)) {
+    moveId = action.move === undefined ? DEFAULT_MOVES[type] : action.move;
+    move = typeof moveId === 'string' && Object.hasOwn(COMBAT_MOVES, moveId) ? COMBAT_MOVES[moveId] : null;
+    if (!move || move.action !== type) return { ...out, log: 'กระบวนท่าไม่ถูกต้อง' };
+    if (actor.qi < move.cost) return { ...out, log: 'ปราณไม่พอ' };
+  } else if (action.move !== undefined) return { ...out, log: 'กระบวนท่าไม่ถูกต้อง' };
   if (type === 'item' && (!['potion', 'medicine'].includes(action.item) || actor.inventory[action.item] < 1)) return { ...out, log: 'ไม่มีไอเทมที่ใช้' };
 
   actor.defending = false;
+  actor.defenseType = 'all';
   if (actor.poison > 0) {
     finishDamage(actor, 5);
     actor.poison -= 1;
     if (actor.dead) return { ...out, ok: true, log: `${actor.name} ถูกพิษจนสิ้นชีวิต` };
   }
   if (type === 'defend') {
+    actor.qi -= move.cost;
     actor.defending = true;
-    out.log = `${actor.name} ตั้งรับ`;
+    actor.defenseType = move.defense;
+    out.log = `${actor.name} ใช้${move.name}`;
   } else if (type === 'flee') {
     out.escaped = rng() < 0.5;
     out.log = out.escaped ? `${actor.name} หลบหนีสำเร็จ` : `${actor.name} หลบหนีไม่สำเร็จ`;
@@ -64,11 +77,20 @@ function resolveAction({ actor: input, target: opponent, action = {}, rng = Math
       out.log = `${actor.name} ใช้ยาบำรุงเส้นปราณ`;
     }
   } else {
-    if (type === 'skill') actor.qi -= 20;
-    const damage = finishDamage(target, actor.power * (type === 'skill' ? 1.8 : 1) * (target.defending ? 0.5 : 1));
-    target.defending = false;
-    out.log = `${actor.name} ${type === 'skill' ? 'ปล่อยปราณ' : 'โจมตี'} ${target.name} เสียพลังชีวิต ${damage}`;
+    actor.qi -= move.cost;
+    if (move.accuracy < 1 && rng() >= move.accuracy) {
+      out.hit = false;
+      out.log = `${actor.name} ใช้${move.name} แต่พลาด`;
+    } else {
+      out.hit = true;
+      const defense = target.defending ? (target.defenseType === 'all' || target.defenseType === type ? 0.5 : 0.8) : 1;
+      const damage = finishDamage(target, actor.power * move.multiplier * defense);
+      target.defending = false;
+      target.defenseType = 'all';
+      out.log = `${actor.name} ใช้${move.name} ${target.name} เสียพลังชีวิต ${damage}`;
+    }
   }
+  out.move = moveId || null;
   out.ok = true;
   return out;
 }

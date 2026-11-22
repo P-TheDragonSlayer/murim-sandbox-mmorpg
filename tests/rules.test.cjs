@@ -28,6 +28,37 @@ test('invalid action and unaffordable skills do not consume a turn or mutate', (
   assert.equal(result.actor.hp,100);
   assert.equal(result.actor.poison,2);
 });
+test('selected moves apply server-defined damage, qi and accuracy', () => {
+  const actor = createFighter({id:'a', power:10}), target = createFighter({id:'b'});
+  const wave = resolveAction({actor,target,action:{type:'skill',move:'qi_wave'}});
+  assert.equal(wave.target.hp,76); assert.equal(wave.actor.qi,65); assert.equal(wave.move,'qi_wave');
+  const hit = resolveAction({actor,target,action:{type:'attack',move:'heavy_slash'},rng:()=>0.74});
+  assert.equal(hit.target.hp,86);
+  const miss = resolveAction({actor,target,action:{type:'attack',move:'heavy_slash'},rng:()=>0.75});
+  assert.equal(miss.target.hp,100); assert.match(miss.log,/พลาด/);
+  const invalid = resolveAction({actor,target,action:{type:'attack',move:'qi_wave'}});
+  assert.equal(invalid.ok,false); assert.equal(invalid.actor.qi,100); assert.equal(invalid.target.hp,100);
+});
+test('specialized defenses persist and reduce the next matching attack more strongly', () => {
+  const defender=createFighter({id:'a',qi:30}), attacker=createFighter({id:'b',power:10});
+  const qiGuard=resolveAction({actor:defender,target:attacker,action:{type:'defend',move:'guard_qi'}});
+  assert.equal(qiGuard.actor.qi,20); assert.equal(qiGuard.actor.defenseType,'skill');
+  const matching=resolveAction({actor:attacker,target:qiGuard.actor,action:{type:'skill',move:'qi_strike'}});
+  assert.equal(matching.target.hp,91); assert.equal(matching.target.defending,false);
+  const different=resolveAction({actor:attacker,target:qiGuard.actor,action:{type:'attack',move:'slash'}});
+  assert.equal(different.target.hp,92);
+  const noQi=createFighter({id:'a',qi:0,poison:1});
+  const rejected=resolveAction({actor:noQi,target:attacker,action:{type:'defend',move:'guard_qi'}});
+  assert.equal(rejected.ok,false);assert.equal(rejected.actor.hp,100);assert.equal(rejected.actor.poison,1);
+  const attackGuard=resolveAction({actor:defender,target:attacker,action:{type:'defend',move:'guard_technique'}});
+  assert.equal(attackGuard.actor.qi,30);
+  assert.equal(resolveAction({actor:attacker,target:attackGuard.actor,action:{type:'attack'}}).target.hp,95);
+  const defaultGuard=resolveAction({actor:defender,target:attacker,action:{type:'defend'}});
+  assert.equal(defaultGuard.move,'guard_technique');
+  assert.equal(resolveAction({actor:attacker,target:defaultGuard.actor,action:{type:'skill'}}).target.hp,86);
+  const miss=resolveAction({actor:attacker,target:attackGuard.actor,action:{type:'attack',move:'heavy_slash'},rng:()=>1});
+  assert.equal(miss.target.defending,true);
+});
 test('interrupted absorption injures meridians and medicine restores them', () => {
   const actor = createFighter({id:'a', cultivation:30});
   const hit = resolveChannel({actor,kind:'absorb',interrupted:true,amount:50});

@@ -54,6 +54,9 @@
 .battle-player-card strong,.opponent-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .battle-values{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:.52rem}
 @media (max-width:360px){.battle-arena{min-height:0}}
+/* Technique choices occupy the same space as the main combat commands. */
+.battle-move-actions button{display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.05;font-size:.59rem}
+.battle-move-actions small{font-size:.52rem;font-weight:600}
 @media (orientation:landscape) and (max-height:600px){.battle-player-card,.opponent-card{top:4%;bottom:auto}}
 
 /* One four-by-two sheet supplies town walking and battle sword frames. */

@@ -50,7 +50,7 @@ function animateBattleCharacters(event, localId) {
   };
   if (event.action === 'attack' || event.action === 'skill') {
     trigger(actor, 'is-attacking');
-    if (target !== actor) trigger(target, 'is-hit');
+    if (event.hit !== false && target !== actor) trigger(target, 'is-hit');
   }
 }
 setBattlePortrait('player', BATTLE_ART.player);
@@ -65,6 +65,49 @@ let battleChoice = 0;
 let previousBattleId = null;
 let deathMenuShown = false;
 let menuChoice = null;
+let moveCatalog = null;
+let moveCategory = null;
+fetch('/shared/combat-moves.json').then(response => {
+  if (!response.ok) throw new Error('catalog unavailable');
+  return response.json();
+}).then(catalog => { moveCatalog = catalog; }).catch(() => { moveCatalog = null; });
+
+function closeMoveMenu() {
+  const wasOpen = !!moveCategory;
+  moveCategory = null;
+  $('battle-move-actions').hidden = true;
+  $('battle-main-actions').hidden = false;
+  if (wasOpen) $('battle-log').textContent = journal[0] || 'เลือกกระบวนท่า';
+  battleChoice = 0;
+  highlightBattleChoice();
+}
+function moveDescription(move) {
+  const cost = `${move.cost} ปราณ`;
+  if (move.action === 'defend') return `${cost} · ลด${move.defense === 'attack' ? 'กระบวนท่า' : 'ปราณ'} 50% · อีกประเภท 20%`;
+  return `${cost} · พลัง ${Math.round(move.multiplier * 100)}% · แม่นยำ ${Math.round(move.accuracy * 100)}%`;
+}
+function openMoveMenu(category) {
+  if (!moveCatalog) { log('โหลดรายการท่าไม่สำเร็จ กรุณารีเฟรช'); return; }
+  const options = Object.entries(moveCatalog).filter(([, move]) => move.action === category);
+  if (!options.length) { log('ไม่พบท่าสำหรับคำสั่งนี้'); return; }
+  const me = state.snapshot?.players?.find(p => p.id === state.playerId);
+  const holder = $('battle-move-actions');
+  holder.replaceChildren(...options.map(([id, move]) => {
+    const button = document.createElement('button');
+    button.dataset.action = category; button.dataset.move = id;
+    button.disabled = !me || move.cost > me.qi;
+    button.title = moveDescription(move);
+    const name = document.createElement('span'); name.textContent = move.name;
+    const cost = document.createElement('small'); cost.textContent = `${move.cost} ปราณ`;
+    button.append(name, cost);
+    return button;
+  }));
+  const back = document.createElement('button'); back.dataset.back = ''; back.textContent = 'กลับ';
+  holder.append(back);
+  moveCategory = category; battleChoice = 0;
+  $('battle-main-actions').hidden = true; holder.hidden = false;
+  highlightBattleChoice();
+}
 
 function setMenuChoice(element) {
   if (menuChoice) menuChoice.classList.remove('menu-selected');
@@ -85,17 +128,22 @@ function setMenu(open) {
 
 function battleButtons() {
   const bag = document.querySelector('#battle-panel .battle-items');
-  const scope = bag?.open ? bag : document.querySelector('#battle-panel .battle-bottom');
+  const scope = bag?.open ? bag : moveCategory ? $('battle-move-actions') : $('battle-main-actions');
   if (!scope) return [];
-  return Array.from(scope.querySelectorAll('button[data-action]'))
+  return Array.from(scope.querySelectorAll('button[data-action], button[data-back]'))
     .filter(button => button.getClientRects().length && !button.disabled);
 }
 function highlightBattleChoice() {
   const buttons = battleButtons();
-  document.querySelectorAll('#battle-panel button[data-action]').forEach(button => button.classList.remove('selected-action'));
+  document.querySelectorAll('#battle-panel button[data-action], #battle-panel button[data-back]').forEach(button => button.classList.remove('selected-action'));
   if (!buttons.length) return;
   battleChoice = Math.min(battleChoice, buttons.length - 1);
   buttons[battleChoice].classList.add('selected-action');
+  const selected = buttons[battleChoice];
+  if (moveCategory && selected.dataset.move) {
+    const move = moveCatalog[selected.dataset.move];
+    $('battle-log').textContent = `${move.name} · ${moveDescription(move)}`;
+  }
 }
 function selectDirection(dx, dy) {
   if (!$('menu-overlay').hidden) {
@@ -195,7 +243,8 @@ function updateInterface() {
   $('inventory').textContent = `ยา ${me.inventory?.potion ?? 0} · ยาบำรุง ${me.inventory?.medicine ?? 0}${me.meridianDamage ? ` · เส้นปราณเสียหาย ${me.meridianDamage}` : ''}`;
   $('items').replaceChildren(...(me.items || []).map((item) => { const p = document.createElement('p'); const history = (item.history || []).map((h) => `${h.event}: ${h.owner || '—'}`).join(' → '); p.textContent = `${item.name} · ${history}`; return p; }));
   const battle = s.battles?.find((b) => b.id === me.combatId);
-  if (battle && battle.id !== previousBattleId) { battleChoice = 0; setMenu(false); }
+  if (battle && battle.id !== previousBattleId) { closeMoveMenu(); setMenu(false); }
+  if (!battle && moveCategory) closeMoveMenu();
   if (me.dead && !holdBattleForEffect && !deathMenuShown) { setMenu(true); deathMenuShown = true; }
   if (!me.dead && deathMenuShown) { setMenu(false); deathMenuShown = false; }
   previousBattleId = battle?.id || null;
@@ -206,6 +255,7 @@ function updateInterface() {
   $('mode').textContent = me.dead ? 'สิ้นชีวิต' : battle ? 'กำลังต่อสู้' : me.location === 'world' ? (nearWorldTown(me, s) ? 'กด A เข้าเมือง' : 'จุดเขียวคือผู้เดินทาง') : 'เดินทาง';
   if (battle) {
     const myTurn = battle.turn === me.id;
+    if (!myTurn && moveCategory) closeMoveMenu();
     $('turn').textContent = myTurn ? 'ตาของคุณ' : 'รอคู่ต่อสู้';
     const otherId = battle.players.find((id) => id !== me.id);
     const other = s.players.find((p) => p.id === otherId);
@@ -215,10 +265,13 @@ function updateInterface() {
     const opponentQi = $('battle-opponent-qi');
     opponentQi.hidden = other?.qi == null || other?.qiMax == null;
     if (!opponentQi.hidden) opponentQi.textContent = `ปราณ: ${Math.round(other.qi)} / ${other.qiMax}`;
-    document.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = !myTurn; });
+    document.querySelectorAll('button[data-action]').forEach((button) => {
+      const move = button.dataset.move && moveCatalog?.[button.dataset.move];
+      button.disabled = !myTurn || (!!move && move.cost > me.qi);
+    });
     highlightBattleChoice();
-    if (typeof battle.log === 'string') log(battle.log);
-    else if (Array.isArray(battle.log) && battle.log.length) log(battle.log.at(-1));
+    if (!moveCategory && typeof battle.log === 'string') log(battle.log);
+    else if (!moveCategory && Array.isArray(battle.log) && battle.log.length) log(battle.log.at(-1));
   }
 }
 
@@ -373,7 +426,15 @@ function startGame() {
 }
 $('name').value = state.name;
 $('join-form').addEventListener('submit', (event) => { event.preventDefault(); state.name = $('name').value.trim(); if (state.name) send({ type: 'join', name: state.name, ...(state.token ? { token: state.token } : {}) }); });
-for (const b of document.querySelectorAll('button[data-action]')) b.addEventListener('click', () => send({ type: 'action', action: b.dataset.action, ...(b.dataset.item ? { item: b.dataset.item } : {}) }));
+document.querySelector('#battle-panel').addEventListener('click', event => {
+  const button = event.target.closest('button[data-action],button[data-back]');
+  if (!button || button.disabled) return;
+  if ('back' in button.dataset) { closeMoveMenu(); return; }
+  const action = button.dataset.action;
+  if (!button.dataset.move && ['attack', 'skill', 'defend'].includes(action)) { openMoveMenu(action); return; }
+  send({type:'action', action, ...(button.dataset.move ? {move:button.dataset.move} : {}), ...(button.dataset.item ? {item:button.dataset.item} : {})});
+  if (button.dataset.move) closeMoveMenu();
+});
 $('meditate').addEventListener('click', () => send({ type: 'meditate' }));
 $('practice').addEventListener('click', () => send({ type: 'practice' }));
 $('heal').addEventListener('click', () => send({ type: 'heal' }));
@@ -406,6 +467,7 @@ $('control-a').addEventListener('click', () => {
 $('control-b').addEventListener('click', () => {
   if (!$('menu-overlay').hidden) return setMenu(false);
   if (!$('battle-panel').hidden) {
+    if (moveCategory) return closeMoveMenu();
     const items = document.querySelector('#battle-panel .battle-items');
     if (items) { items.open = !items.open; battleChoice = 0; highlightBattleChoice(); }
   }
