@@ -46,11 +46,12 @@
 
 /* Keep the original art inside the arena and clear of the opposite status card. */
 .fighter.has-art{width:22%;height:55%;transform:none}
-.fighter-opponent.has-art{right:26%;top:auto;bottom:4%;height:65%}
+.fighter-opponent.has-art{right:29%;top:auto;bottom:4%;height:65%}
 .fighter-player.has-art{left:8%;bottom:4%;transform:scaleX(-1)}
-.battle-player-card{width:24%;min-width:0}
+.battle-player-card{top:6%;bottom:auto;width:24%;min-width:0}
 .battle-player-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:360px){.battle-arena{min-height:0}}
+@media (orientation:landscape) and (max-height:600px){.battle-player-card{top:4%;bottom:auto}}
 
 /* One four-by-two sheet supplies town walking and battle sword frames. */
 .fighter.has-sheet .fighter-art{display:none}
