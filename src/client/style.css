@@ -46,11 +46,11 @@
 
 /* Keep the original art inside the arena and clear of the opposite status card. */
 .fighter.has-art{width:22%;height:55%;transform:none}
-.fighter-opponent.has-art{right:34%;top:auto;bottom:4%;height:60%}
+.fighter-opponent.has-art{right:8%;top:auto;bottom:4%;height:55%}
 .fighter-player.has-art{left:8%;bottom:4%;transform:scaleX(-1)}
-.battle-player-card,.opponent-card{top:6%;bottom:auto;width:39%;max-width:39%;min-width:0;display:grid;gap:1px}
-.battle-player-card{left:4%;right:auto}
-.opponent-card{left:auto;right:4%}
+.battle-player-card,.opponent-card{top:6%;bottom:auto;width:34%;max-width:34%;min-width:0;display:grid;gap:1px}
+.battle-player-card{left:11%;right:auto;width:37%;max-width:37%;padding:2px 4px}
+.opponent-card{left:auto;right:14%}
 .battle-player-card strong,.opponent-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .battle-values{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:.52rem}
 @media (max-width:360px){.battle-arena{min-height:0}}
