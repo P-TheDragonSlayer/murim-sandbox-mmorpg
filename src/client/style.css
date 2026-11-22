@@ -53,10 +53,24 @@
 .opponent-card{left:auto;right:14%}
 .battle-player-card strong,.opponent-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .battle-values{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:.52rem}
+.topbar-status{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
+.topbar-status .connection{max-width:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.music-toggle{flex:none;min-height:30px;padding:2px 7px;border:1px solid #59665a;border-radius:4px;background:#151c18;color:#d4c19a;font-size:.65rem;white-space:nowrap}
 @media (max-width:360px){.battle-arena{min-height:0}}
 /* Technique choices occupy the same space as the main combat commands. */
 .battle-move-actions button{display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.05;font-size:.59rem}
 .battle-move-actions small{font-size:.52rem;font-weight:600}
+/* The dice are visual only; both values and the target come from the server. */
+.dice-panel{position:absolute;inset:0;z-index:8;display:grid;place-items:center;background:rgba(7,15,12,.72);color:#233729}
+.dice-box{width:min(82%,230px);max-height:100%;display:grid;justify-items:center;gap:2px;padding:5px 8px;background:#e3ebca;border:2px solid #344d3a;box-shadow:3px 3px 0 #263a2b;font-weight:700;font-size:.65rem;text-align:center}
+.dice-pair{display:flex;gap:9px;justify-content:center}
+.die{width:clamp(28px,8vw,42px);aspect-ratio:1;display:grid;place-items:center;background:url('/public/art/ui/d20-die.svg') center/contain no-repeat;color:#233729;font-weight:900;font-size:.85rem;image-rendering:pixelated}
+.dice-panel.rolling .die{animation:dice-shake .2s ease-in-out infinite alternate}
+.dice-buttons{display:flex;justify-content:center;gap:5px}
+.dice-buttons button{padding:2px 8px;min-height:24px;border:2px solid #344d3a;border-radius:0;background:#f2f4dc;color:#233729;font-size:.62rem;font-weight:800}
+.dice-buttons button.selected-action{outline:2px solid #b57e2c;outline-offset:-2px;background:#fff7c7}
+@keyframes dice-shake{from{transform:rotate(-12deg) translateY(1px)}to{transform:rotate(12deg) translateY(-1px)}}
+@media(prefers-reduced-motion:reduce){.dice-panel.rolling .die{animation:none}}
 @media (orientation:landscape) and (max-height:600px){.battle-player-card,.opponent-card{top:4%;bottom:auto}}
 
 /* One four-by-two sheet supplies town walking and battle sword frames. */

@@ -20,7 +20,7 @@ function createFighter(input = {}) {
     power: Math.max(1, n(input.power, 10)), dead: Boolean(input.dead) || hp <= 0,
     inventory: { potion: Math.max(0, n(input.inventory?.potion, 2)), medicine: Math.max(0, n(input.inventory?.medicine, 1)) },
     meridianDamage: injury, defending: Boolean(input.defending),
-    defenseType: input.defending && ['attack','skill','all'].includes(input.defenseType) ? input.defenseType : 'all',
+    defenseType: input.defending && ['attack','skill','all','dodge'].includes(input.defenseType) ? input.defenseType : 'all',
     poison: Math.max(0, Math.floor(n(input.poison, 0))),
     cultivation: Math.max(0, n(input.cultivation, 0)),
   };
@@ -35,34 +35,53 @@ function finishDamage(target, amount) {
 }
 
 // Turn ownership, range, and transitions are checked by the caller.
-function resolveAction({ actor: input, target: opponent, action = {}, rng = Math.random }) {
-  const actor = copy(input), target = copy(opponent);
-  const out = { actor, target, ok: false, escaped: false, log: '' };
-  if (!actor || actor.dead) return { ...out, log: 'ตัวละครไม่สามารถต่อสู้ได้' };
+function validateAction({actor, target, action = {}}) {
+  if (!actor || actor.dead) return {ok:false, log:'ตัวละครไม่สามารถต่อสู้ได้'};
   const type = action.type;
-  if (!['attack', 'skill', 'defend', 'flee', 'item'].includes(type)) return { ...out, log: 'คำสั่งไม่ถูกต้อง' };
-  if (['attack', 'skill'].includes(type) && (!target || target.dead || actor.id === target.id)) return { ...out, log: 'เป้าหมายไม่ถูกต้อง' };
+  if (!['attack', 'skill', 'defend', 'flee', 'item'].includes(type)) return {ok:false, log:'คำสั่งไม่ถูกต้อง'};
+  if (['attack', 'skill'].includes(type) && (!target || target.dead || actor.id === target.id)) return {ok:false, log:'เป้าหมายไม่ถูกต้อง'};
   let move, moveId;
   if (['attack', 'skill', 'defend'].includes(type)) {
     moveId = action.move === undefined ? DEFAULT_MOVES[type] : action.move;
     move = typeof moveId === 'string' && Object.hasOwn(COMBAT_MOVES, moveId) ? COMBAT_MOVES[moveId] : null;
-    if (!move || move.action !== type) return { ...out, log: 'กระบวนท่าไม่ถูกต้อง' };
-    if (actor.qi < move.cost) return { ...out, log: 'ปราณไม่พอ' };
-  } else if (action.move !== undefined) return { ...out, log: 'กระบวนท่าไม่ถูกต้อง' };
-  if (type === 'item' && (!['potion', 'medicine'].includes(action.item) || actor.inventory[action.item] < 1)) return { ...out, log: 'ไม่มีไอเทมที่ใช้' };
+    if (!move || move.action !== type) return {ok:false, log:'กระบวนท่าไม่ถูกต้อง'};
+    if (actor.qi < move.cost) return {ok:false, log:'ปราณไม่พอ'};
+  } else if (action.move !== undefined) return {ok:false, log:'กระบวนท่าไม่ถูกต้อง'};
+  if (type === 'item' && (!['potion', 'medicine'].includes(action.item) || actor.inventory?.[action.item] < 1)) return {ok:false, log:'ไม่มีไอเทมที่ใช้'};
+  return {ok:true, move, moveId};
+}
+
+// 2d20 check difficulty, adjusted by the ratio of combat power. A higher
+// acting fighter power can never increase the target, and a stronger opponent
+// can never reduce it. Both results remain possible at the extremes.
+function diceTarget(actor, target, moveId) {
+  const difficulty = {slash:19,heavy_slash:23,qi_strike:20,qi_wave:22,guard_technique:19,guard_qi:20,dodge:22};
+  if (!Object.hasOwn(difficulty, moveId)) return null;
+  const own = Math.max(1, n(actor?.power,10)), enemy = Math.max(1,n(target?.power,10));
+  const adjustment = Math.floor(2 * Math.log2(own / enemy));
+  return clamp(difficulty[moveId] - adjustment, 6, 36);
+}
+
+function resolveAction({ actor: input, target: opponent, action = {}, rng = Math.random, rollSuccess }) {
+  const actor = copy(input), target = copy(opponent);
+  const out = { actor, target, ok: false, escaped: false, log: '' };
+  const type = action.type;
+  const valid = validateAction({actor,target,action});
+  if (!valid.ok) return { ...out, log:valid.log };
+  const {move, moveId} = valid;
 
   actor.defending = false;
   actor.defenseType = 'all';
   if (actor.poison > 0) {
     finishDamage(actor, 5);
     actor.poison -= 1;
-    if (actor.dead) return { ...out, ok: true, log: `${actor.name} ถูกพิษจนสิ้นชีวิต` };
+    if (actor.dead) return { ...out, ok: true, actionCancelled:true, hit:false, log: `${actor.name} ถูกพิษจนสิ้นชีวิต` };
   }
   if (type === 'defend') {
     actor.qi -= move.cost;
-    actor.defending = true;
-    actor.defenseType = move.defense;
-    out.log = `${actor.name} ใช้${move.name}`;
+    actor.defending = rollSuccess !== false;
+    actor.defenseType = actor.defending ? move.defense : 'all';
+    out.log = `${actor.name} ใช้${move.name}${actor.defending ? ' สำเร็จ' : ' แต่พลาด'}`;
   } else if (type === 'flee') {
     out.escaped = rng() < 0.5;
     out.log = out.escaped ? `${actor.name} หลบหนีสำเร็จ` : `${actor.name} หลบหนีไม่สำเร็จ`;
@@ -78,16 +97,18 @@ function resolveAction({ actor: input, target: opponent, action = {}, rng = Math
     }
   } else {
     actor.qi -= move.cost;
-    if (move.accuracy < 1 && rng() >= move.accuracy) {
+    if (rollSuccess === false || (rollSuccess === undefined && move.accuracy < 1 && rng() >= move.accuracy)) {
       out.hit = false;
       out.log = `${actor.name} ใช้${move.name} แต่พลาด`;
     } else {
       out.hit = true;
-      const defense = target.defending ? (target.defenseType === 'all' || target.defenseType === type ? 0.5 : 0.8) : 1;
+      const dodged = target.defending && target.defenseType === 'dodge';
+      const defense = dodged ? 0 : target.defending ? (target.defenseType === 'all' || target.defenseType === type ? 0.5 : 0.8) : 1;
       const damage = finishDamage(target, actor.power * move.multiplier * defense);
       target.defending = false;
       target.defenseType = 'all';
-      out.log = `${actor.name} ใช้${move.name} ${target.name} เสียพลังชีวิต ${damage}`;
+      if (dodged) { out.hit = false; out.dodged = true; }
+      out.log = dodged ? `${target.name} หลบ${move.name}ได้สำเร็จ` : `${actor.name} ใช้${move.name} ${target.name} เสียพลังชีวิต ${damage}`;
     }
   }
   out.move = moveId || null;
@@ -136,4 +157,4 @@ function weightedSelect(entries, rng = Math.random) {
   return valid[valid.length - 1].id;
 }
 
-module.exports = { createFighter, resolveAction, resolveChannel, computeCorpseQi, weightedSelect };
+module.exports = { createFighter, validateAction, diceTarget, resolveAction, resolveChannel, computeCorpseQi, weightedSelect };

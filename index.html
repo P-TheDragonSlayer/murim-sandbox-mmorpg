@@ -9,7 +9,7 @@
 </head>
 <body>
   <main class="shell">
-    <header class="topbar"><div class="brand"><span class="brand-mark">✦</span><span>ยุทธภพ <small>MURIM SANDBOX</small></span></div><span id="connection" class="connection">กำลังเชื่อมต่อ</span></header>
+    <header class="topbar"><div class="brand"><span class="brand-mark">✦</span><span>ยุทธภพ <small>MURIM SANDBOX</small></span></div><div class="topbar-status"><span id="connection" class="connection">กำลังเชื่อมต่อ</span><button id="music-toggle" class="music-toggle" type="button" aria-label="ปิดเพลงพื้นหลัง" aria-pressed="true">♫ เปิด</button></div></header>
     <section id="join" class="join">
       <span class="join-symbol">✦</span><p class="eyebrow">MURIM SANDBOX · ONLINE PROTOTYPE</p><h1>เริ่มต้นในยุทธภพ</h1><p class="join-copy">เรื่องราวของจอมยุทธ์ เริ่มจากชื่อของคุณ</p>
       <form id="join-form"><label for="name">ชื่อตัวละคร</label><input id="name" maxlength="24" placeholder="ชื่อจอมยุทธ์" required autocomplete="nickname"><button class="primary" type="submit" disabled>เข้าสู่ยุทธภพ</button></form>
@@ -28,8 +28,14 @@
                 <div class="fighter fighter-player" aria-hidden="true"><i class="fighter-head"></i><i class="fighter-body"></i><i class="fighter-sword"></i></div>
                 <div class="battle-player-card"><strong id="battle-player-name">คุณ: จอมยุทธ์</strong><div class="battle-values"><span id="battle-player-hp">HP —</span><span id="battle-player-qi">ปราณ —</span></div></div>
               </div>
-              <div class="battle-bottom"><div id="battle-log" class="battle-log" aria-live="polite">เลือกกระบวนท่า</div><div id="battle-main-actions" class="battle-actions"><button data-action="attack">โจมตี</button><button data-action="skill">ใช้ปราณ</button><button data-action="defend">ป้องกัน</button><button data-action="flee">หนี</button></div><div id="battle-move-actions" class="battle-actions battle-move-actions" hidden aria-label="เลือกกระบวนท่า"></div></div>
+              <div class="battle-bottom"><div id="battle-log" class="battle-log" aria-live="polite">เลือกกระบวนท่า</div><div id="battle-main-actions" class="battle-actions"><button data-action="attack">โจมตี</button><button data-action="skill">ใช้ปราณ</button><button data-action="defend">ป้องกัน/หลบ</button><button data-action="flee">หนี</button></div><div id="battle-move-actions" class="battle-actions battle-move-actions" hidden aria-label="เลือกกระบวนท่า"></div></div>
               <details class="battle-items"><summary>กระเป๋ายา</summary><div class="battle-actions"><button data-action="item" data-item="potion">ยารักษา</button><button data-action="item" data-item="medicine">ยาบำรุง</button></div></details>
+              <div id="dice-panel" class="dice-panel" hidden role="dialog" aria-label="ทอยลูกเต๋า" aria-live="polite">
+                <div class="dice-box"><strong id="dice-title">ทอยลูกเต๋า</strong><span id="dice-target"></span>
+                  <div class="dice-pair" aria-label="ลูกเต๋า 20 หน้า 2 ลูก"><span class="die" id="die-one">?</span><span class="die" id="die-two">?</span></div>
+                  <span id="dice-message"></span><div class="dice-buttons"><button id="dice-roll" type="button">ทอย (A)</button><button id="dice-cancel" type="button">ยกเลิก (B)</button></div>
+                </div>
+              </div>
             </section>
             <section id="menu-overlay" class="menu-overlay" hidden aria-label="เมนูยุทธภพ">
               <div class="menu-bar"><span>เมนูยุทธภพ</span><button id="menu-close" aria-label="ปิดเมนู">✕</button></div>
@@ -53,6 +59,8 @@
       </div>
     </div>
   </main>
+  <audio id="background-music" src="/public/audio/background-ditto.mp3" preload="none" loop></audio>
   <script type="module" src="/src/client/main.js"></script>
+  <script type="module" src="/src/client/music.js"></script>
 </body>
 </html>

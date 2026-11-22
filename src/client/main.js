@@ -67,6 +67,11 @@ let deathMenuShown = false;
 let menuChoice = null;
 let moveCatalog = null;
 let moveCategory = null;
+let rollRequestPending = false;
+let pendingRoll = null;
+let diceResultTimer = null;
+let queuedBattleEffects = [];
+let dicePhase = 'hidden';
 fetch('/shared/combat-moves.json').then(response => {
   if (!response.ok) throw new Error('catalog unavailable');
   return response.json();
@@ -83,8 +88,9 @@ function closeMoveMenu() {
 }
 function moveDescription(move) {
   const cost = `${move.cost} ปราณ`;
-  if (move.action === 'defend') return `${cost} · ลด${move.defense === 'attack' ? 'กระบวนท่า' : 'ปราณ'} 50% · อีกประเภท 20%`;
-  return `${cost} · พลัง ${Math.round(move.multiplier * 100)}% · แม่นยำ ${Math.round(move.accuracy * 100)}%`;
+  if (move.defense === 'dodge') return `${cost} · ทอยสำเร็จหลบการโจมตีถัดไป`;
+  if (move.action === 'defend') return `${cost} · สำเร็จลด${move.defense === 'attack' ? 'กระบวนท่า' : 'ปราณ'} 50% · อีกประเภท 20%`;
+  return `${cost} · พลัง ${Math.round(move.multiplier * 100)}% · ทอยตามสถานะ`;
 }
 function openMoveMenu(category) {
   if (!moveCatalog) { log('โหลดรายการท่าไม่สำเร็จ กรุณารีเฟรช'); return; }
@@ -127,6 +133,7 @@ function setMenu(open) {
 }
 
 function battleButtons() {
+  if (!$('dice-panel').hidden) return Array.from(document.querySelectorAll('.dice-buttons button')).filter(button => button.getClientRects().length && !button.disabled);
   const bag = document.querySelector('#battle-panel .battle-items');
   const scope = bag?.open ? bag : moveCategory ? $('battle-move-actions') : $('battle-main-actions');
   if (!scope) return [];
@@ -135,7 +142,7 @@ function battleButtons() {
 }
 function highlightBattleChoice() {
   const buttons = battleButtons();
-  document.querySelectorAll('#battle-panel button[data-action], #battle-panel button[data-back]').forEach(button => button.classList.remove('selected-action'));
+  document.querySelectorAll('#battle-panel button[data-action], #battle-panel button[data-back], .dice-buttons button').forEach(button => button.classList.remove('selected-action'));
   if (!buttons.length) return;
   battleChoice = Math.min(battleChoice, buttons.length - 1);
   buttons[battleChoice].classList.add('selected-action');
@@ -160,7 +167,7 @@ function selectDirection(dx, dy) {
   if (!$('battle-panel').hidden) {
     const buttons = battleButtons();
     if (!buttons.length) return;
-    const step = dx || dy * 2;
+    const step = !$('dice-panel').hidden && buttons.length === 2 ? (dx || dy) : dx || dy * 2;
     battleChoice = (battleChoice + step + buttons.length) % buttons.length;
     highlightBattleChoice();
     return;
@@ -183,6 +190,65 @@ function send(message) {
   else log('ยังไม่เชื่อมต่อกับเซิร์ฟเวอร์');
 }
 
+function closeDiceView() {
+  clearTimeout(diceResultTimer); diceResultTimer = null;
+  pendingRoll = null; rollRequestPending = false; dicePhase = 'hidden';
+  $('dice-panel').hidden = true; $('dice-panel').classList.remove('rolling');
+  const effects = queuedBattleEffects; queuedBattleEffects = [];
+  for (const run of effects) run();
+  battleChoice = 0;
+  if (state.snapshot) updateInterface();
+  highlightBattleChoice();
+}
+
+function showDiceReady(msg) {
+  rollRequestPending = false; pendingRoll = msg; dicePhase = 'ready';
+  closeMoveMenu();
+  const dicePanel = $('dice-panel'); dicePanel.hidden = false; dicePanel.classList.remove('rolling');
+  $('dice-title').textContent = moveCatalog?.[msg.move]?.name || 'ทอยลูกเต๋า';
+  $('dice-target').textContent = `ทอยรวมอย่างน้อย ${msg.target} จาก 40`;
+  $('die-one').textContent = '?'; $('die-two').textContent = '?';
+  $('dice-message').textContent = 'กดทอยเพื่อตัดสินผล';
+  document.querySelector('.dice-buttons').hidden = false;
+  $('dice-roll').disabled = false; $('dice-cancel').disabled = false;
+  battleChoice = 0; highlightBattleChoice();
+}
+
+function showDiceResult(msg) {
+  clearTimeout(diceResultTimer); pendingRoll = null; rollRequestPending = false; dicePhase = 'result';
+  const dicePanel = $('dice-panel'); dicePanel.hidden = false; dicePanel.classList.add('rolling');
+  $('dice-title').textContent = `${msg.actorId === state.playerId ? 'คุณ' : 'คู่ต่อสู้'} · ${moveCatalog?.[msg.move]?.name || 'ทอยลูกเต๋า'}`;
+  $('dice-target').textContent = `ต้องทอยรวมอย่างน้อย ${msg.target} จาก 40`;
+  $('die-one').textContent = '?'; $('die-two').textContent = '?';
+  $('dice-message').textContent = 'กำลังทอย...';
+  document.querySelector('.dice-buttons').hidden = true;
+  diceResultTimer = setTimeout(() => {
+    dicePanel.classList.remove('rolling');
+    $('die-one').textContent = String(msg.dice[0]); $('die-two').textContent = String(msg.dice[1]);
+    $('dice-message').textContent = msg.actionCancelled ? `รวม ${msg.total} · ท่าถูกยกเลิกเพราะพิษ` : `รวม ${msg.total} · ${msg.success ? 'สำเร็จ' : 'ไม่สำเร็จ'}`;
+    diceResultTimer = setTimeout(closeDiceView, 1800);
+  }, 350);
+}
+
+function receiveBattleEffect(msg) {
+  const terminal = msg.actorDead || msg.targetDead || msg.escaped;
+  if (terminal) holdBattleForEffect += 1;
+  const run = () => {
+    let released = false;
+    const release = () => {
+      if (!terminal || released) return;
+      released = true; holdBattleForEffect = Math.max(0, holdBattleForEffect - 1);
+      if (state.snapshot) updateInterface();
+    };
+    // A poison tick can defeat the actor before the selected attack happens.
+    if (msg.actorDead && msg.hit == null && ['attack', 'skill'].includes(msg.action)) return release();
+    if (msg.action === 'defend' && msg.success === false) return release();
+    animateBattleCharacters(msg, state.playerId);
+    if (!playBattleEffect(msg, state.playerId, release)) release();
+  };
+  if (dicePhase === 'result') queuedBattleEffects.push(run); else run();
+}
+
 function connect() {
   $('connection').textContent = 'กำลังเชื่อมต่อ';
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -201,23 +267,23 @@ function connect() {
       $('join').hidden = true; $('game-ui').hidden = false;
       startGame();
       log('เข้าสู่ยุทธภพแล้ว');
+    } else if (msg.type === 'roll_ready') {
+      showDiceReady(msg);
+    } else if (msg.type === 'dice_result') {
+      showDiceResult(msg);
     } else if (msg.type === 'battle_fx') {
-      animateBattleCharacters(msg, state.playerId);
-      const terminal = msg.actorDead || msg.targetDead || msg.escaped;
-      if (terminal) holdBattleForEffect += 1;
-      let released = false;
-      const release = () => {
-        if (!terminal || released) return;
-        released = true; holdBattleForEffect = Math.max(0, holdBattleForEffect - 1);
-        if (state.snapshot) updateInterface();
-      };
-      if (!playBattleEffect(msg, state.playerId, release)) release();
+      receiveBattleEffect(msg);
     } else if (msg.type === 'state') {
       state.snapshot = msg; state.playerId = msg.you || state.playerId;
       updateInterface(); scene?.renderState(msg);
-    } else if (msg.type === 'error' || msg.type === 'notice') log(msg.message || 'เกิดข้อผิดพลาด');
+    } else if (msg.type === 'error' || msg.type === 'notice') {
+      if (msg.type === 'error' && rollRequestPending) { rollRequestPending = false; if (state.snapshot) updateInterface(); }
+      if (msg.type === 'error' && dicePhase === 'rolling') closeDiceView();
+      log(msg.message || 'เกิดข้อผิดพลาด');
+    }
   });
   socket.addEventListener('close', () => {
+    closeDiceView();
     $('connection').textContent = 'ขาดการเชื่อมต่อ · กำลังลองใหม่';
     document.querySelector('#join-form button[type=submit]').disabled = true;
     log('การเชื่อมต่อขาด กำลังเชื่อมต่อใหม่');
@@ -245,10 +311,11 @@ function updateInterface() {
   const battle = s.battles?.find((b) => b.id === me.combatId);
   if (battle && battle.id !== previousBattleId) { closeMoveMenu(); setMenu(false); }
   if (!battle && moveCategory) closeMoveMenu();
-  if (me.dead && !holdBattleForEffect && !deathMenuShown) { setMenu(true); deathMenuShown = true; }
+  if ((!battle || battle.turn !== me.id) && (dicePhase === 'ready' || dicePhase === 'rolling' || rollRequestPending)) closeDiceView();
+  if (me.dead && !holdBattleForEffect && dicePhase !== 'result' && !deathMenuShown) { setMenu(true); deathMenuShown = true; }
   if (!me.dead && deathMenuShown) { setMenu(false); deathMenuShown = false; }
   previousBattleId = battle?.id || null;
-  $('battle-panel').hidden = (!battle || me.dead) && !holdBattleForEffect;
+  $('battle-panel').hidden = (!battle || me.dead) && !holdBattleForEffect && dicePhase !== 'result';
   if (!battle && holdBattleForEffect) document.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = true; });
   $('world-actions').hidden = !!battle || me.dead;
   $('dead-panel').hidden = !me.dead;
@@ -267,7 +334,7 @@ function updateInterface() {
     if (!opponentQi.hidden) opponentQi.textContent = `ปราณ: ${Math.round(other.qi)} / ${other.qiMax}`;
     document.querySelectorAll('button[data-action]').forEach((button) => {
       const move = button.dataset.move && moveCatalog?.[button.dataset.move];
-      button.disabled = !myTurn || (!!move && move.cost > me.qi);
+      button.disabled = !myTurn || rollRequestPending || (!!move && move.cost > me.qi);
     });
     highlightBattleChoice();
     if (!moveCategory && typeof battle.log === 'string') log(battle.log);
@@ -432,8 +499,27 @@ document.querySelector('#battle-panel').addEventListener('click', event => {
   if ('back' in button.dataset) { closeMoveMenu(); return; }
   const action = button.dataset.action;
   if (!button.dataset.move && ['attack', 'skill', 'defend'].includes(action)) { openMoveMenu(action); return; }
-  send({type:'action', action, ...(button.dataset.move ? {move:button.dataset.move} : {}), ...(button.dataset.item ? {item:button.dataset.item} : {})});
-  if (button.dataset.move) closeMoveMenu();
+  if (button.dataset.move) {
+    if (rollRequestPending || dicePhase !== 'hidden') return;
+    rollRequestPending = true;
+    send({type:'prepare_roll', action, move:button.dataset.move});
+    if (state.snapshot) updateInterface();
+    return;
+  }
+  send({type:'action', action, ...(button.dataset.item ? {item:button.dataset.item} : {})});
+});
+$('dice-roll').addEventListener('click', () => {
+  if (dicePhase !== 'ready' || !pendingRoll) return;
+  dicePhase = 'rolling';
+  $('dice-panel').classList.add('rolling');
+  $('dice-message').textContent = 'กำลังทอย...';
+  $('dice-roll').disabled = true; $('dice-cancel').disabled = true;
+  send({type:'roll_dice', battleId:pendingRoll.battleId, rollId:pendingRoll.rollId});
+});
+$('dice-cancel').addEventListener('click', () => {
+  if (dicePhase !== 'ready' || !pendingRoll) return;
+  send({type:'cancel_roll', battleId:pendingRoll.battleId, rollId:pendingRoll.rollId});
+  closeDiceView();
 });
 $('meditate').addEventListener('click', () => send({ type: 'meditate' }));
 $('practice').addEventListener('click', () => send({ type: 'practice' }));
@@ -467,6 +553,7 @@ $('control-a').addEventListener('click', () => {
 $('control-b').addEventListener('click', () => {
   if (!$('menu-overlay').hidden) return setMenu(false);
   if (!$('battle-panel').hidden) {
+    if (!$('dice-panel').hidden) { if (dicePhase === 'ready') $('dice-cancel').click(); return; }
     if (moveCategory) return closeMoveMenu();
     const items = document.querySelector('#battle-panel .battle-items');
     if (items) { items.open = !items.open; battleChoice = 0; highlightBattleChoice(); }

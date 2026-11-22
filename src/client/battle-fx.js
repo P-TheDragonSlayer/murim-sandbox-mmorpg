@@ -18,6 +18,7 @@ const moveEffects = {
   qi_wave: { action:'skill', effect:beam, anchor:'actor' },
   guard_technique: { action:'defend', effect:guard, anchor:'actor' },
   guard_qi: { action:'defend', effect:qiGuard, anchor:'actor' },
+  dodge: { action:'defend', effect:blink, anchor:'actor' },
 };
 const seen = new Set();
 export function playBattleEffect(event, localId, onDone = () => {}) {

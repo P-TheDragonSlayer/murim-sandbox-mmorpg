@@ -4,5 +4,6 @@
   "qi_strike": {"name":"ดาบปราณ","action":"skill","cost":20,"multiplier":1.8,"accuracy":1},
   "qi_wave": {"name":"คลื่นปราณ","action":"skill","cost":35,"multiplier":2.4,"accuracy":1},
   "guard_technique": {"name":"ตั้งรับกระบวนท่า","action":"defend","cost":0,"defense":"attack"},
-  "guard_qi": {"name":"ตั้งรับปราณ","action":"defend","cost":10,"defense":"skill"}
+  "guard_qi": {"name":"ตั้งรับปราณ","action":"defend","cost":10,"defense":"skill"},
+  "dodge": {"name":"หลบหลีก","action":"defend","cost":0,"defense":"dodge"}
 }

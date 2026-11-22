@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { WebSocketServer, WebSocket } = require('ws');
-const { createFighter, resolveAction, resolveChannel, computeCorpseQi } = require('../shared/rules.cjs');
+const { createFighter, validateAction, diceTarget, resolveAction, resolveChannel, computeCorpseQi } = require('../shared/rules.cjs');
 const { SPAWNS, isWalkable, canTraverse, nearestWalkable } = require('../shared/town-collision.cjs');
 
 // Prototype only: bearer tokens identify players; no production authentication or encryption.
@@ -83,11 +83,11 @@ function cancelChannel(p, interrupted=true) {
 function endBattle(b) {
   if (!b) return;
   clearTimeout(b.timer); battles.delete(b.id);
-  for (const playerId of b.players) { const p=findPlayer(playerId); if(p) p.combatId=null; }
+  for (const playerId of b.players) { const p=findPlayer(playerId); if(p) {p.combatId=null;p.defending=false;p.defenseType='all';} }
 }
 function sendBattleEffect(b, p, enemy, action, item, result) {
   const effect = {type:'battle_fx',id:id(),battleId:b.id,actorId:p.id,targetId:enemy.id,
-    action,move:result.move||null,hit:result.hit??null,item:action==='item'?(item||'potion'):null,escaped:!!result.escaped,
+    action,move:result.move||null,hit:result.hit??null,success:result.rollSuccess??null,item:action==='item'?(item||'potion'):null,escaped:!!result.escaped,
     actorDead:p.hp<=0,targetDead:enemy.hp<=0};
   for (const participant of b.players) {
     const participantSocket=sockets.get(participant);
@@ -108,8 +108,11 @@ function scheduleTurn(b) {
   }
   b.timer=setTimeout(()=>{if(!battles.has(b.id))return; const p=findPlayer(b.turn), enemy=findCombatant(b,b.players.find(i=>i!==b.turn));
     if(!p||!enemy){endBattle(b);save();broadcast();return;}
-    const r=resolveAction({actor:p,target:enemy,action:{type:'defend'}}); Object.assign(p,r.actor); Object.assign(enemy,r.target);
-    b.log=`${p.name}: หมดเวลา ป้องกันอัตโนมัติ`; sendBattleEffect(b,p,enemy,'defend',null,r);
+    // A timeout never rolls on the player's behalf. Clear any pending choice,
+    // then process poison and consume the turn without granting a defense.
+    b.pending=null;
+    const r=resolveAction({actor:p,target:enemy,action:{type:'defend'},rollSuccess:false}); Object.assign(p,r.actor); Object.assign(enemy,r.target);
+    b.log=`${p.name}: หมดเวลา ข้ามเทิร์น`;
     if(p.hp<=0){if(b.dummy){p.hp=1;p.dead=false;}else kill(p);endBattle(b);}else{b.turn=enemy.id;scheduleTurn(b);} save();broadcast();
   },TURNS_MS);
 }
@@ -123,17 +126,22 @@ function kill(victim) {
   state.corpses.push({id:id(),x:victim.x,y:victim.y,ownerName:victim.name,qiAtDeath:(victim.power||0),createdAt:Date.now(),items,absorbed:false});
   victim.items=[]; victim.inventory={potion:0,medicine:0};
 }
-function processAction(p, b, action, ws, item, move) {
+function processAction(p, b, action, ws, item, move, rollSuccess, diceResult) {
   if (b.turn!==p.id) return err(ws,'ยังไม่ถึงเทิร์นของคุณ');
   const enemy=findCombatant(b,b.players.find(i=>i!==p.id)); if(!enemy) return;
   const allowed=['attack','skill','item','defend','flee']; if(!allowed.includes(action)) return err(ws,'คำสั่งไม่ถูกต้อง');
   if(action==='item' && item!==undefined && !['potion','medicine'].includes(item))return err(ws,'ไอเทมไม่ถูกต้อง');
-  const r=resolveAction({actor:p,target:enemy,action:{type:action,item:item||'potion',move}});
+  const r=resolveAction({actor:p,target:enemy,action:{type:action,item:item||'potion',move},rollSuccess});
   if(!r.ok) return err(ws, r.log || 'ใช้คำสั่งไม่ได้');
+  if(typeof rollSuccess==='boolean')r.rollSuccess=rollSuccess;
   Object.assign(p,r.actor); Object.assign(enemy,r.target); b.log=String(r.log || '');
+  if(diceResult) {
+    diceResult.actionCancelled=!!r.actionCancelled;
+    for(const participant of b.players){const participantSocket=sockets.get(participant);if(participantSocket)send(participantSocket,diceResult);}
+  }
   // Presentation events are sent only after an action is accepted. They are not part
   // of snapshots, so movement broadcasts and reconnects cannot replay old effects.
-  sendBattleEffect(b,p,enemy,action,item,r);
+  if(!r.actionCancelled) sendBattleEffect(b,p,enemy,action,item,r);
   for(const participant of b.players){const participantSocket=sockets.get(participant);if(participantSocket)send(participantSocket,{type:'notice',message:b.log});}
   if(enemy.hp<=0) {
     if(b.dummy) send(ws,{type:'notice',message:'ฝึกสำเร็จ หุ่นฝึกพร้อมใช้อีกครั้ง'});
@@ -238,7 +246,43 @@ function onMessage(ws, raw) {
       const b={id:id(),players:[p.id,dummy.id],turn:p.id,log:'เริ่มฝึกกับหุ่น: ไม่มีของตกหรือรางวัลปราณ',dummy};
       p.combatId=b.id;battles.set(b.id,b);save();scheduleTurn(b);broadcast();break;
     }
-    case 'action': {const b=battles.get(p.combatId);if(!b)return err(ws,'ไม่ได้อยู่ในการต่อสู้');processAction(p,b,m.action,ws,m.item,m.move);break;}
+    case 'action': {
+      const b=battles.get(p.combatId);if(!b)return err(ws,'ไม่ได้อยู่ในการต่อสู้');
+      if(b.pending)return err(ws,'กรุณาทอยหรือยกเลิกก่อน');
+      if(['attack','skill','defend'].includes(m.action))return err(ws,'กรุณาเลือกท่าและทอยลูกเต๋า');
+      processAction(p,b,m.action,ws,m.item,m.move);break;
+    }
+    case 'prepare_roll': {
+      const b=battles.get(p.combatId);if(!b)return err(ws,'ไม่ได้อยู่ในการต่อสู้');
+      if(b.turn!==p.id)return err(ws,'ยังไม่ถึงเทิร์นของคุณ');
+      if(b.pending)return err(ws,'กรุณาทอยหรือยกเลิกก่อน');
+      if(!['attack','skill','defend'].includes(m.action))return err(ws,'คำสั่งไม่ถูกต้อง');
+      const enemy=findCombatant(b,b.players.find(i=>i!==p.id));
+      if(!enemy)return err(ws,'ไม่พบคู่ต่อสู้');
+      const validation=validateAction({actor:p,target:enemy,action:{type:m.action,move:m.move}});
+      if(!validation.ok)return err(ws,validation.log);
+      const target=diceTarget(p,enemy,validation.moveId);
+      if(target===null)return err(ws,'กระบวนท่าไม่ถูกต้อง');
+      b.pending={rollId:id(),actorId:p.id,action:m.action,move:validation.moveId,target};
+      send(ws,{type:'roll_ready',battleId:b.id,rollId:b.pending.rollId,action:b.pending.action,move:b.pending.move,target});
+      break;
+    }
+    case 'cancel_roll': {
+      const b=battles.get(p.combatId), pending=b?.pending;
+      if(!b || b.id!==m.battleId || !pending || pending.rollId!==m.rollId || pending.actorId!==p.id || b.turn!==p.id)return err(ws,'ไม่มีการทอยที่ยกเลิกได้');
+      b.pending=null;send(ws,{type:'roll_cancelled',battleId:b.id,rollId:pending.rollId});break;
+    }
+    case 'roll_dice': {
+      const b=battles.get(p.combatId), pending=b?.pending;
+      if(!b || b.id!==m.battleId || !pending || pending.rollId!==m.rollId || pending.actorId!==p.id || b.turn!==p.id)return err(ws,'ไม่มีการทอยที่ทำได้');
+      const enemy=findCombatant(b,b.players.find(i=>i!==p.id));
+      const validation=validateAction({actor:p,target:enemy,action:{type:pending.action,move:pending.move}});
+      if(!validation.ok){b.pending=null;return err(ws,validation.log);}
+      b.pending=null;
+      const dice=[crypto.randomInt(1,21),crypto.randomInt(1,21)], total=dice[0]+dice[1], success=total>=pending.target;
+      const result={type:'dice_result',battleId:b.id,rollId:pending.rollId,actorId:p.id,action:pending.action,move:pending.move,dice,total,target:pending.target,success};
+      processAction(p,b,pending.action,ws,undefined,pending.move,success,result);break;
+    }
     case 'meditate': beginChannel(p,'meditate',null,ws);break;
     case 'heal': beginChannel(p,'medicine',null,ws);break;
     case 'absorb':beginChannel(p,'absorb',m.corpseId,ws);break;
@@ -257,7 +301,7 @@ function onMessage(ws, raw) {
     }
   }
 }
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml'};
+const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.mp3':'audio/mpeg'};
 const server=http.createServer((req,res)=>{
   let url;try{url=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.writeHead(400).end();return;}
   if(url==='/')url='/index.html';
@@ -268,6 +312,28 @@ const server=http.createServer((req,res)=>{
   const relative=path.relative(root,file).split(path.sep).join('/');
   const allowed=relative==='index.html'||relative==='shared/combat-moves.json'||relative.startsWith('src/')||relative.startsWith('assets/')||relative.startsWith('public/')||relative.startsWith('node_modules/phaser/dist/');
   if(!allowed||!file.startsWith(root+path.sep)){res.writeHead(404).end();return;}
+  // Mobile browsers may request only part of an audio file to start or seek.
+  if (path.extname(file).toLowerCase()==='.mp3') {
+    fs.stat(file,(error,stat)=>{
+      if(error||!stat.isFile()){res.writeHead(404).end();return;}
+      const headers={'Content-Type':'audio/mpeg','Cache-Control':'no-store','Accept-Ranges':'bytes'};
+      const range=req.headers.range;
+      let start=0, end=stat.size-1, status=200;
+      if(range){
+        const match=/^bytes=(\d*)-(\d*)$/.exec(range);
+        if(!match || (!match[1] && !match[2])){res.writeHead(416,{...headers,'Content-Range':`bytes */${stat.size}`}).end();return;}
+        if(!match[1]){const suffix=Number(match[2]);start=Math.max(0,stat.size-suffix);}
+        else {start=Number(match[1]);if(match[2])end=Number(match[2]);}
+        if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=stat.size||end<start){res.writeHead(416,{...headers,'Content-Range':`bytes */${stat.size}`}).end();return;}
+        end=Math.min(end,stat.size-1);status=206;headers['Content-Range']=`bytes ${start}-${end}/${stat.size}`;
+      }
+      headers['Content-Length']=Math.max(0,end-start+1);
+      res.writeHead(status,headers);
+      if(req.method==='HEAD'||stat.size===0){res.end();return;}
+      const stream=fs.createReadStream(file,{start,end});stream.on('error',()=>res.destroy());stream.pipe(res);
+    });
+    return;
+  }
   fs.readFile(file,(e,data)=>{if(e){res.writeHead(404).end();return;}res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-store'});res.end(data);});
 });
 const wss=new WebSocketServer({server,path:'/ws',maxPayload:8192});

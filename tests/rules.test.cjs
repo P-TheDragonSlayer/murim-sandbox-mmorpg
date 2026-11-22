@@ -1,7 +1,34 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createFighter, resolveAction, resolveChannel, computeCorpseQi, weightedSelect } = require('../shared/rules.cjs');
+const { createFighter, diceTarget, resolveAction, resolveChannel, computeCorpseQi, weightedSelect } = require('../shared/rules.cjs');
+
+test('2d20 target is bounded and higher acting power cannot make a check harder', () => {
+  for(const move of ['slash','heavy_slash','qi_strike','qi_wave','guard_technique','guard_qi','dodge']) {
+    let previous=Infinity;
+    for(const power of [1,2,5,10,20,50,100,1000,1e9]) {
+      const target=diceTarget({power},{power:10},move);
+      assert.ok(target>=6 && target<=36);assert.ok(target<=previous,move);previous=target;
+    }
+    assert.ok(diceTarget({power:10},{power:100},move)>=diceTarget({power:10},{power:10},move));
+  }
+  assert.equal(diceTarget({power:10},{power:10},'unknown'),null);
+});
+test('failed dice checks consume qi without damage or protection; dodge blocks one hit', () => {
+  const actor=createFighter({id:'a',qi:100}), target=createFighter({id:'b'});
+  const missed=resolveAction({actor,target,action:{type:'skill',move:'qi_wave'},rollSuccess:false});
+  assert.equal(missed.actor.qi,65);assert.equal(missed.target.hp,100);assert.equal(missed.hit,false);
+  const failedGuard=resolveAction({actor,target,action:{type:'defend',move:'guard_qi'},rollSuccess:false});
+  assert.equal(failedGuard.actor.qi,90);assert.equal(failedGuard.actor.defending,false);
+  const failedDodge=resolveAction({actor,target,action:{type:'defend',move:'dodge'},rollSuccess:false});
+  assert.equal(failedDodge.actor.defending,false);
+  const dodge=resolveAction({actor,target,action:{type:'defend',move:'dodge'},rollSuccess:true});
+  assert.equal(dodge.actor.defenseType,'dodge');
+  const attack=resolveAction({actor:target,target:dodge.actor,action:{type:'attack',move:'slash'},rollSuccess:true});
+  assert.equal(attack.target.hp,100);assert.equal(attack.target.defending,false);assert.equal(attack.dodged,true);
+  const next=resolveAction({actor:target,target:attack.target,action:{type:'attack',move:'slash'},rollSuccess:true});
+  assert.equal(next.target.hp,90);
+});
 
 test('attack damages only the copy and lethal damage marks target dead', () => {
   const actor = createFighter({id: 'a', power: 12});

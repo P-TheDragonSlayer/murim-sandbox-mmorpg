@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">
+  <!-- Reusable d20 face. The result number is rendered separately by the game. -->
+  <path fill="#182a20" d="M24 2h16v3h6v3h5v4h4v5h3v5h3v6h2v10h-2v6h-3v5h-3v5h-4v4h-5v3h-6v3H24v-3h-6v-3h-5v-4H9v-5H6v-5H3v-6H1V28h2v-6h3v-5h3v-5h4V8h5V5h6z"/>
+  <path fill="#b69a60" d="M25 5h14v3h6v3h5v4h3v5h3v5h3v4h1v6h-1v5h-3v5h-3v5h-3v3h-5v3h-6v3H25v-3h-6v-3h-5v-3h-3v-5H8v-5H5v-5H4v-6h1v-4h3v-5h3v-5h3v-4h5V8h6z"/>
+  <path fill="#d6c693" d="M25 6h14v3h6v3h5v4h3v5h3v5h2v3H6v-3h2v-5h3v-5h3v-4h5V9h6z"/>
+  <path fill="#806f49" d="M5 35h54v5h-3v5h-3v5h-3v3h-5v3h-6v3H25v-3h-6v-3h-5v-3h-3v-5H8v-5H5z"/>
+  <path fill="none" stroke="#344b35" stroke-width="2" d="M32 6v7M6 28l12-5M58 28l-12-5M11 48l10-6M53 48l-10-6M32 58v-6"/>
+  <path fill="#efe4b8" stroke="#344b35" stroke-width="2" d="M32 13l14 10-3 19-11 10-11-10-3-19z"/>
+</svg>

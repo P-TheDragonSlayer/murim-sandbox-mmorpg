@@ -10,19 +10,98 @@ const { isWalkable } = require('../shared/town-collision.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate, message='condition') { for(let i=0;i<250;i++){if(predicate())return;await delay(25)} throw new Error(`Timed out: ${message}`); }
 async function freePort(){ const server=net.createServer();await new Promise((r,j)=>server.once('error',j).listen(0,'127.0.0.1',r));const port=server.address().port;await new Promise(r=>server.close(r));return port; }
-async function startServer(port, dataPath) {
-  const p=spawn(process.execPath,[path.join(__dirname,'../server/index.cjs')],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MURIM_DATA_PATH:dataPath},stdio:['ignore','pipe','pipe']});
+async function startServer(port, dataPath, options={}) {
+  const preload=options.realDice?[]:['--require',path.join(__dirname,'fixtures/deterministic-server.cjs')];
+  const p=spawn(process.execPath,[...preload,path.join(__dirname,'../server/index.cjs')],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MURIM_DATA_PATH:dataPath,MURIM_TEST_SHORT_TURNS:options.shortTurns?'1':'0'},stdio:['ignore','pipe','pipe']});
   let output='';p.stdout.on('data',chunk=>output+=chunk);p.stderr.on('data',chunk=>output+=chunk);
   await until(()=>output.includes('Murim prototype')||p.exitCode!==null,'server startup');
   if(p.exitCode!==null)throw Error(output); return p;
 }
 async function stopServer(p){if(!p||p.exitCode!==null)return; const stopped=new Promise(resolve=>p.once('exit',resolve));p.kill();await stopped;}
 async function connect(port,name,token) {
-  const ws=new WebSocket(`ws://127.0.0.1:${port}/ws`), c={ws,state:null,welcome:null,errors:[],effects:[]};
-  ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='state')c.state=m;if(m.type==='welcome')c.welcome=m;if(m.type==='error')c.errors.push(m.message);if(m.type==='battle_fx')c.effects.push(m)});
+  const ws=new WebSocket(`ws://127.0.0.1:${port}/ws`), c={ws,state:null,welcome:null,errors:[],effects:[],ready:[],rolls:[],autoRoll:true};
+  ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='state')c.state=m;if(m.type==='welcome')c.welcome=m;if(m.type==='error')c.errors.push(m.message);if(m.type==='battle_fx')c.effects.push(m);if(m.type==='dice_result')c.rolls.push(m);if(m.type==='roll_ready'){c.ready.push(m);if(c.autoRoll)sendRaw(c,{type:'roll_dice',battleId:m.battleId,rollId:m.rollId})}});
   await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject)});send(c,{type:'join',name,token});await until(()=>c.welcome&&c.state,'join');return c;
 }
-function send(c,m){c.ws.send(JSON.stringify(m));}
+function sendRaw(c,m){c.ws.send(JSON.stringify(m));}
+function send(c,m){
+  if(m.type==='action' && ['attack','skill','defend'].includes(m.action)) return sendRaw(c,{type:'prepare_roll',action:m.action,...(m.move===undefined?{}:{move:m.move})});
+  sendRaw(c,m);
+}
+test('the unmodified production random source generates two valid d20 values', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  let proc,c;
+  try {
+    proc=await startServer(port,dataPath,{realDice:true});c=await connect(port,'random dice');
+    send(c,{type:'practice'});await until(()=>c.state.battles.length===1,'practice started');
+    send(c,{type:'action',action:'attack',move:'slash'});await until(()=>c.rolls.length===1,'real dice result');
+    const r=c.rolls[0];assert.equal(r.dice.length,2);assert.ok(r.dice.every(x=>Number.isInteger(x)&&x>=1&&x<=20));
+    assert.equal(r.total,r.dice[0]+r.dice[1]);assert.equal(r.success,r.total>=r.target);
+  } finally {
+    if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
+test('rolls are authoritative, cancellable, single-use and apply permanent death in PvP', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  const fighter=(id,x,hp)=>({id,name:id,x,y:500,hp,maxHp:100,qi:30,qiMax:100,power:10,dead:false,inventory:{potion:2,medicine:1},items:[]});
+  fs.writeFileSync(dataPath,JSON.stringify({accounts:{tokenA:fighter('A',500,100),tokenB:fighter('B',524,10)},corpses:[]}));
+  let proc,a,b;
+  try {
+    proc=await startServer(port,dataPath);a=await connect(port,'ignored','tokenA');b=await connect(port,'ignored','tokenB');
+    a.autoRoll=false;b.autoRoll=false;
+    send(a,{type:'challenge',targetId:'B'});await until(()=>a.state.battles.length===1,'challenge');
+    const battleId=a.state.battles[0].id;
+    sendRaw(a,{type:'action',action:'attack',move:'slash'});await until(()=>a.errors.length===1,'reject bypass');
+    sendRaw(a,{type:'roll_dice',battleId,rollId:'fake',dice:[20,20]});await until(()=>a.errors.length===2,'reject no pending roll');
+    send(a,{type:'action',action:'skill',move:'qi_wave'});await until(()=>a.errors.length===3,'reject insufficient qi');
+    assert.equal(a.state.players.find(p=>p.id==='A').qi,30);assert.equal(a.state.battles[0].turn,'A');
+    send(a,{type:'action',action:'attack',move:'slash'});await until(()=>a.ready.length===1,'ready');
+    const old=a.ready[0];assert.equal(old.battleId,battleId);assert.equal(old.target,19);
+    assert.equal(a.state.players.find(p=>p.id==='B').hp,10);assert.equal(a.rolls.length,0);assert.equal(a.effects.length,0);
+    sendRaw(b,{type:'roll_dice',battleId,rollId:old.rollId});await until(()=>b.errors.length===1,'reject opponent roll');
+    sendRaw(a,{type:'cancel_roll',battleId,rollId:old.rollId});await delay(30);
+    assert.equal(a.state.battles[0].turn,'A');assert.equal(a.state.players.find(p=>p.id==='A').qi,30);
+    send(a,{type:'action',action:'attack',move:'slash'});await until(()=>a.ready.length===2,'second ready');
+    const ready=a.ready[1];assert.notEqual(ready.rollId,old.rollId);
+    sendRaw(a,{type:'roll_dice',battleId,rollId:old.rollId});await until(()=>a.errors.length===4,'reject stale roll');
+    assert.equal(a.rolls.length,0);
+    sendRaw(a,{type:'roll_dice',battleId,rollId:ready.rollId,dice:[1,1],success:false,target:40});
+    await until(()=>a.rolls.length===1&&b.rolls.length===1,'results delivered');
+    assert.deepEqual(a.rolls[0].dice,[20,20]);assert.equal(a.rolls[0].total,40);assert.equal(a.rolls[0].target,19);assert.equal(a.rolls[0].success,true);
+    assert.deepEqual(a.rolls[0],b.rolls[0]);
+    await until(()=>a.state.corpses.length===1&&!a.state.battles.length,'permadeath applied');
+    assert.equal(a.state.players.find(p=>p.id==='B').dead,true);assert.equal(a.state.corpses[0].ownerName,'B');
+    sendRaw(a,{type:'roll_dice',battleId,rollId:ready.rollId});await until(()=>a.errors.length===5,'reject replay');
+    assert.equal(a.rolls.length,1);
+  } finally {
+    for(const c of [a,b])if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
+test('a pending roll times out without rolling and clears on session replacement', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  const fighter=(id,x)=>({id,name:id,x,y:500,hp:100,maxHp:100,qi:100,qiMax:100,power:10,dead:false,inventory:{potion:2,medicine:1},items:[]});
+  fs.writeFileSync(dataPath,JSON.stringify({accounts:{tokenA:fighter('A',500),tokenB:fighter('B',524)},corpses:[]}));
+  let proc,a,b,replacement;
+  try {
+    proc=await startServer(port,dataPath,{shortTurns:true});a=await connect(port,'ignored','tokenA');b=await connect(port,'ignored','tokenB');a.autoRoll=false;b.autoRoll=false;
+    send(a,{type:'challenge',targetId:'B'});await until(()=>a.state.battles.length===1,'challenge');
+    send(a,{type:'action',action:'attack',move:'slash'});await until(()=>a.ready.length===1,'pending choice');
+    const old=a.ready[0];await until(()=>a.state.battles[0]?.turn==='B','pending timeout');
+    assert.equal(a.rolls.length,0);assert.equal(a.effects.length,0);assert.equal(a.state.players.find(p=>p.id==='B').hp,100);
+    sendRaw(a,{type:'roll_dice',battleId:old.battleId,rollId:old.rollId});await until(()=>a.errors.length===1,'stale timeout roll');
+    send(b,{type:'action',action:'defend',move:'dodge'});await until(()=>b.ready.length===1,'second pending choice');
+    const pending=b.ready[0];replacement=await connect(port,'ignored','tokenB');
+    await until(()=>a.state.battles.length===0,'reconnect ended battle');
+    sendRaw(replacement,{type:'roll_dice',battleId:pending.battleId,rollId:pending.rollId});
+    await until(()=>replacement.errors.length===1,'stale reconnect roll');
+    assert.equal(replacement.rolls.length,0);assert.equal(replacement.state.players.find(p=>p.id==='B').dead,false);
+  } finally {
+    for(const c of [a,b,replacement])if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
 test('move catalog and server validate selected moves without consuming a turn', {timeout:15000}, async()=>{
   const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
   fs.writeFileSync(dataPath,JSON.stringify({accounts:{tokenA:{id:'A',name:'A',x:450,y:500,hp:100,maxHp:100,qi:5,qiMax:100,power:10,dead:false,inventory:{potion:2,medicine:1},items:[]}},corpses:[]}));
@@ -130,6 +209,7 @@ test('a lethal status tick in practice cannot permanently kill the trainee', {ti
     send(c,{type:'action',action:'attack'});await until(()=>!c.state.players.some(p=>p.isDummy),'safe practice ends');
     const p=c.state.players.find(player=>player.id==='poisoned-trainee');
     assert.equal(p.hp,1);assert.equal(p.dead,false);assert.equal(p.deaths,0);assert.equal(c.state.corpses.length,0);
+    assert.equal(c.rolls.length,1);assert.equal(c.rolls[0].actionCancelled,true);assert.equal(c.effects.length,0,'poison must not show an attack that never happened');
   } finally {
     if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
     if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
