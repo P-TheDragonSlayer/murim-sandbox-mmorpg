@@ -74,8 +74,8 @@
 
 /* One four-by-two sheet supplies town walking and battle sword frames. */
 .fighter.has-sheet .fighter-art{display:none}
-.fighter.has-sheet{height:65%}
-.fighter-player.has-sheet{height:50%;transform:none}
+.fighter.has-sheet{height:50%}
+.fighter-player.has-sheet{transform:none}
 .fighter-opponent.has-sheet{transform:scaleX(-1)}
 .fighter-sprite{display:block;position:absolute;left:50%;bottom:0;height:100%;aspect-ratio:1;transform:translateX(-50%);background-repeat:no-repeat;background-size:400% 200%;background-position:0 0;image-rendering:pixelated}
 .fighter.is-attacking .fighter-sprite{animation:fighter-strike .56s steps(4,end)}
@@ -88,5 +88,4 @@
 @media (max-width:360px){
   .opponent-card{font-size:.53rem;line-height:1.05;padding:2px 4px}
   .opponent-card .battle-label{font-size:.46rem}
-  .fighter-player.has-sheet{height:50%}
 }

@@ -67,6 +67,7 @@ let deathMenuShown = false;
 let menuChoice = null;
 let moveCatalog = null;
 let moveCategory = null;
+let challengePendingUntil = 0;
 let rollRequestPending = false;
 let pendingRoll = null;
 let diceResultTimer = null;
@@ -318,8 +319,9 @@ function updateInterface() {
   $('battle-panel').hidden = (!battle || me.dead) && !holdBattleForEffect && dicePhase !== 'result';
   if (!battle && holdBattleForEffect) document.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = true; });
   $('world-actions').hidden = !!battle || me.dead;
+  $('enter-town').hidden = !nearWorldTown(me, s);
   $('dead-panel').hidden = !me.dead;
-  $('mode').textContent = me.dead ? 'สิ้นชีวิต' : battle ? 'กำลังต่อสู้' : me.location === 'world' ? (nearWorldTown(me, s) ? 'กด A เข้าเมือง' : 'จุดเขียวคือผู้เดินทาง') : 'เดินทาง';
+  $('mode').textContent = me.dead ? 'สิ้นชีวิต' : battle ? 'กำลังต่อสู้' : nearbyOpponent() ? 'กด A ท้าสู้' : me.location === 'world' ? (nearWorldTown(me, s) ? 'กด A เข้าเมือง' : 'จุดเขียวคือผู้เดินทาง') : 'เดินทาง';
   if (battle) {
     const myTurn = battle.turn === me.id;
     if (!myTurn && moveCategory) closeMoveMenu();
@@ -550,6 +552,20 @@ function nearest(collection) {
   const distance = entry => world ? Math.hypot(entry.mapX - me.mapX, entry.mapY - me.mapY) : Math.hypot(entry.x - me.x, (entry.y ?? 300) - (me.y ?? 300));
   return collection.filter(entry => entry.id !== me.id && !entry.dead && !entry.isDummy && samePlace(entry) && Number.isFinite(distance(entry))).sort((a, b) => distance(a) - distance(b))[0] || null;
 }
+function nearbyOpponent() {
+  const me = state.snapshot?.players?.find(p => p.id === state.playerId);
+  if (!me || me.dead || me.combatId) return null;
+  const target = nearest((state.snapshot?.players || []).filter(p => !p.combatId));
+  if (!target) return null;
+  const world = me.location === 'world';
+  const d = world ? Math.hypot(target.mapX-me.mapX,target.mapY-me.mapY) : Math.hypot(target.x-me.x,(target.y??300)-(me.y??300));
+  return d <= (world ? 70 : 150) ? target : null;
+}
+function challengePlayer(target) {
+  if (Date.now() < challengePendingUntil) return;
+  challengePendingUntil = Date.now() + 1200;
+  send({ type: 'challenge', targetId: target.id });
+}
 $('challenge').addEventListener('click', () => {
   const me = state.snapshot?.players?.find(p => p.id === state.playerId);
   const target = nearest(state.snapshot?.players || []);
@@ -562,8 +578,9 @@ $('challenge').addEventListener('click', () => {
     if (d > (world ? 70 : 150)) message = 'ผู้เล่นอยู่ไกลเกินไป เดินเข้าไปใกล้ก่อนท้าสู้';
   }
   $('challenge-help').textContent = message || `กำลังท้า ${target.name}`;
-  if (message) log(message); else send({ type: 'challenge', targetId: target.id });
+  if (message) log(message); else challengePlayer(target);
 });
+$('enter-town').addEventListener('click', () => { if (nearWorldTown(state.snapshot?.players?.find(p => p.id === state.playerId), state.snapshot)) send({type:'enter_town'}); });
 for (const type of ['loot', 'absorb']) $(type).addEventListener('click', () => { const corpse = nearest((state.snapshot?.corpses || []).filter((c) => type === 'loot' ? !c.looted : c.qi > 0)); if (corpse) send({ type, corpseId: corpse.id }); else log('ไม่พบสิ่งของหรือปราณตกค้าง'); });
 $('control-menu').addEventListener('click', () => setMenu($('menu-overlay').hidden));
 $('menu-close').addEventListener('click', () => setMenu(false));
@@ -578,7 +595,9 @@ $('control-a').addEventListener('click', () => {
     battleButtons()[battleChoice]?.click();
   } else {
     const me = state.snapshot?.players?.find(p => p.id === state.playerId);
-    if (nearWorldTown(me, state.snapshot)) send({type:'enter_town'});
+    const target = nearbyOpponent();
+    if (target) challengePlayer(target);
+    else if (nearWorldTown(me, state.snapshot)) send({type:'enter_town'});
     else setMenu(true);
   }
 });
