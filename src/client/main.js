@@ -1,20 +1,27 @@
 import Phaser from '/node_modules/phaser/dist/phaser.esm.js';
-import { CHARACTER_LAYERS, CHARACTER_ANIMATIONS, BATTLE_ART } from './assets.js';
+import { CHARACTER_LAYERS, CHARACTER_ANIMATIONS, WORLD_ART, BATTLE_ART } from './assets.js';
 import { playBattleEffect } from './battle-fx.js';
 import { createChannelEffect } from './world-fx.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { socket: null, snapshot: null, playerId: null, token: localStorage.getItem('murim-token'), name: localStorage.getItem('murim-name') || '', joined: false };
-// Replace geometric battle placeholders only after a local portrait loads.
-for (const side of ['player', 'opponent']) {
-  const url = BATTLE_ART[side], holder = document.querySelector(`.fighter-${side}`);
-  if (!url || !holder) continue;
-  const portrait = new Image();
-  portrait.alt = '';
-  portrait.className = 'fighter-art';
-  portrait.onload = () => { holder.classList.add('has-art'); holder.appendChild(portrait); };
+// Change portraits only when the battle target changes; keep a fallback if loading fails.
+function setBattlePortrait(side, url) {
+  const holder = document.querySelector(`.fighter-${side}`);
+  if (!holder || holder.dataset.portrait === (url || '')) return;
+  holder.dataset.portrait = url || '';
+  holder.classList.remove('has-art');
+  holder.querySelector('.fighter-art')?.remove();
+  if (!url) return;
+  const portrait = new Image(); portrait.alt = ''; portrait.className = 'fighter-art';
+  portrait.onload = () => {
+    if (holder.dataset.portrait !== url) return;
+    holder.appendChild(portrait); holder.classList.add('has-art');
+  };
   portrait.src = url;
 }
+setBattlePortrait('player', BATTLE_ART.player);
+setBattlePortrait('opponent', BATTLE_ART.opponent);
 
 const journal = [];
 let scene;
@@ -166,6 +173,7 @@ function updateInterface() {
     $('turn').textContent = myTurn ? 'ตาของคุณ' : 'รอคู่ต่อสู้';
     const otherId = battle.players.find((id) => id !== me.id);
     const other = s.players.find((p) => p.id === otherId);
+    setBattlePortrait('opponent', other?.isDummy ? BATTLE_ART.dummy : BATTLE_ART.opponent);
     $('opponent').textContent = `คู่ต่อสู้: ${other?.name || 'จอมยุทธ์'} · ชีวิต ${other?.hp ?? '?'} / ${other?.maxHp ?? '?'}`;
     document.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = !myTurn; });
     highlightBattleChoice();
@@ -182,6 +190,8 @@ class WorldScene extends Phaser.Scene {
   preload() {
     // Complete painted town is a background, not a set of collision objects.
     this.load.image('town-full-scene', '/public/art/backgrounds/murim-town-dusk-concept-v1.png');
+    this.load.image('world-player-v1', WORLD_ART.player);
+    this.load.image('world-dummy-v1', WORLD_ART.dummy);
     for (const layer of CHARACTER_LAYERS) if (layer.url) this.load.spritesheet(layer.key, layer.url, { frameWidth: layer.frameWidth, frameHeight: layer.frameHeight });
   }
   create() {
@@ -208,20 +218,30 @@ class WorldScene extends Phaser.Scene {
   renderState(s) {
     if (!this.cameras?.main) return;
     // Camera remains fixed so the whole painted scene is visible to every player.
+    if (s.trainingDummy && !this.trainingDummy) {
+      const pt=project(s.trainingDummy.x,s.trainingDummy.y);
+      const marker=this.textures.exists('world-dummy-v1')
+        ? this.add.image(0,0,'world-dummy-v1').setOrigin(0.5,1).setDisplaySize(64,67)
+        : this.add.rectangle(0,-25,25,50,0xb59058);
+      const label=this.add.text(0,-72,s.trainingDummy.name,{fontFamily:'sans-serif',fontSize:'13px',color:'#fff9e3',backgroundColor:'#263c34'}).setOrigin(0.5);
+      this.trainingDummy=this.add.container(pt.x,pt.y,[marker,label]).setDepth(pt.y*10);
+    }
     const live = new Set();
     for (const p of s.players || []) {
-      if (p.dead) continue;
+      if (p.dead || p.isDummy) continue;
       live.add(p.id);
       let item = this.characters.get(p.id);
       if (!item) {
         const own = p.id === state.playerId;
         const shadow = this.add.ellipse(0, 0, 38, 10, 0x1e3027, 0.45);
         const placeholder = this.add.rectangle(0, -26, 27, 50, own ? 0xf8edd4 : 0xc6ded7).setStrokeStyle(2, own ? 0xb99b65 : 0x86aba6);
-        const name = this.add.text(0, -62, '', { fontFamily:'sans-serif', fontSize:'13px', color:'#fff9e3', backgroundColor:'#263c34' }).setOrigin(0.5);
+        const portrait = this.textures.exists('world-player-v1') ? this.add.image(0,0,'world-player-v1').setOrigin(0.5,1).setDisplaySize(64,72) : null;
+        const name = this.add.text(0, -78, '', { fontFamily:'sans-serif', fontSize:'13px', color:'#fff9e3', backgroundColor:'#263c34' }).setOrigin(0.5);
         const layers = CHARACTER_LAYERS.filter((layer) => layer.url && this.textures.exists(layer.key)).sort((a,b) => a.depth-b.depth).map((layer) => ({ def: layer, sprite: this.add.sprite(0, 0, layer.key).setOrigin(layer.originX, layer.originY).setScale(layer.scale) }));
-        if (layers.some((l) => l.def.key === 'body')) placeholder.setVisible(false);
-        const container = this.add.container(0,0,[shadow,placeholder,...layers.map(({sprite})=>sprite),name]);
-        item = { container, name, layers }; this.characters.set(p.id,item);
+        if (portrait || layers.some((l) => l.def.key === 'body')) placeholder.setVisible(false);
+        if (portrait && layers.some((l) => l.def.key === 'body')) portrait.setVisible(false);
+        const container = this.add.container(0,0,[shadow,placeholder,...(portrait ? [portrait] : []),...layers.map(({sprite})=>sprite),name]);
+        item = { container, name, layers, portrait }; this.characters.set(p.id,item);
       }
       if (item.channelFx?.kind !== p.channel) {
         item.channelFx?.destroy();
@@ -230,6 +250,7 @@ class WorldScene extends Phaser.Scene {
       const pt=project(p.x,p.y ?? 300), old=this.previous.get(p.id), moving=old && (old.x !== p.x || old.y !== p.y);
       item.container.setPosition(pt.x,pt.y).setDepth(pt.y*10);
       item.name.setText(p.name + (p.id === state.playerId ? ' · คุณ' : ''));
+      item.portrait?.setFlipX(p.facing === -1);
       for (const { def, sprite } of item.layers) { sprite.setFlipX(p.facing === -1); const anim=`${def.key}-${moving ? 'walk' : 'idle'}`; if(sprite.anims.currentAnim?.key !== anim) sprite.play(anim,true); }
       this.previous.set(p.id,{x:p.x,y:p.y});
     }
@@ -251,6 +272,7 @@ $('name').value = state.name;
 $('join-form').addEventListener('submit', (event) => { event.preventDefault(); state.name = $('name').value.trim(); if (state.name) send({ type: 'join', name: state.name, ...(state.token ? { token: state.token } : {}) }); });
 for (const b of document.querySelectorAll('button[data-action]')) b.addEventListener('click', () => send({ type: 'action', action: b.dataset.action, ...(b.dataset.item ? { item: b.dataset.item } : {}) }));
 $('meditate').addEventListener('click', () => send({ type: 'meditate' }));
+$('practice').addEventListener('click', () => send({ type: 'practice' }));
 $('heal').addEventListener('click', () => send({ type: 'heal' }));
 $('respawn').addEventListener('click', () => send({ type: 'respawn' }));
 function nearest(collection) {

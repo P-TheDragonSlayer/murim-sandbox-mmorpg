@@ -7,6 +7,7 @@
 - `BG-MOUNTAIN-DUSK`: `public/art/backgrounds/murim-mountains-dusk-v1.png` — ภาพ AI ระยะไกล 1672×941 RGB; ใช้ในเกมแล้ว แต่ยังต้องรับรองสไตล์
 - `CONCEPT-TOWN-01`: `public/art/backgrounds/murim-town-dusk-concept-v1.png` — ภาพ AI แนวทางสีและองค์ประกอบ ยังไม่ใช่แผนที่เดินได้หรือ tileset
 - PixelFX: ซอร์ส 244 เอฟเฟกต์ที่ `public/vendor/pixelfx`, MIT พร้อม LICENSE/NOTICE; ใช้เอฟเฟกต์ต่อสู้ 5 คำสั่ง และสถานะฝึกปราณในโลกแล้ว **ไม่รวมเป็น asset ใหม่ที่ต้องเจน**
+- `CHAR-PROTOTYPE-01` และ `TRAINING-DUMMY-01`: `public/art/characters/murim-wanderer-v1.png` และ `training-dummy-v1.png` — AI สร้างด้วยเครื่องมือสร้างภาพในตัว เป็น PNG โปร่งใสท่ายืนหนึ่งภาพ ทดลองใช้ในเมืองและฉากต่อสู้แล้ว; ไม่ใช่ `CHAR-BODY-01` แยกชั้นหรือแอนิเมชัน 4 ทิศ
 - `BUILD-01`: `public/art/objects/hanok-house-v1.png` — AI สร้างด้วยเครื่องมือสร้างภาพในตัว; PNG RGBA 1536×1024 นำเข้าในเมืองทดลอง 1 หลัง สถานะรอตรวจงานภาพ; ยังต้องตรวจขอบโปร่งใส แยกหลังคา และเพิ่ม collision ก่อนใช้จริง
 - ร่าง เสื้อ อาวุธ ภาพต่อสู้ และบ้านอื่นในเกมยังเป็น placeholder; ยังไม่มีชุดตัวละครถอดเปลี่ยนที่ใช้งานจริง
 

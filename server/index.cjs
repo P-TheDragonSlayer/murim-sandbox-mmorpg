@@ -13,6 +13,8 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const WIDTH = 1600, HEIGHT = 600, LEGACY_Y = 300, TURNS_MS = 30000, CHANNEL_MS = 5000;
 const DEFAULT_SPAWN = SPAWNS[1];
+// Shared landmark; each player gets an independent, non-persistent practice opponent.
+const TRAINING_DUMMY = Object.freeze({id:'training-dummy',name:'หุ่นฝึก',x:470,y:500});
 const isCity = x => x < 180 || (x >= 300 && x <= 400) || (x >= 600 && x <= 700);
 let state = { accounts: {}, corpses: [] };
 try { state = JSON.parse(fs.readFileSync(dataPath, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -44,7 +46,8 @@ function publicPlayer(p, viewer) {
     qiMax:p.id===viewer.id?p.qiMax:undefined, power:p.id===viewer.id || viewer.power>=p.power ? p.power : null,
     dead:p.dead, city:isCity(p.x), inventory:p.id===viewer.id?p.inventory:undefined, combatId:p.combatId||null,
     deaths:p.deaths||0, facing:p.facing||1, meridianDamage:p.meridianDamage||0,
-    channel:channels.has(p.id) ? channels.get(p.id).kind : null, items:p.id===viewer.id?p.items:undefined};
+    channel:channels.has(p.id) ? channels.get(p.id).kind : null, items:p.id===viewer.id?p.items:undefined,
+    isDummy:!!p.isDummy};
 }
 function visibleCorpses() {
   const now = Date.now();
@@ -54,11 +57,15 @@ function broadcast() {
   for (const [playerId, ws] of sockets) {
     const p = Object.values(state.accounts).find(a=>a.id===playerId);
     if (!p) continue;
-    send(ws, {type:'state', you:p.id, players:Object.values(state.accounts).filter(a=>sockets.has(a.id) || a.id===p.id).map(a=>publicPlayer(a,p)), battles:[...battles.values()].map(b=>({id:b.id,players:b.players,turn:b.turn,log:b.log})),corpses:visibleCorpses()});
+    const players=Object.values(state.accounts).filter(a=>sockets.has(a.id) || a.id===p.id).map(a=>publicPlayer(a,p));
+    const practice=battles.get(p.combatId);
+    if(practice?.dummy) players.push(publicPlayer(practice.dummy,p));
+    send(ws, {type:'state', you:p.id, players, trainingDummy:TRAINING_DUMMY, battles:[...battles.values()].map(b=>({id:b.id,players:b.players,turn:b.turn,log:b.log})),corpses:visibleCorpses()});
   }
 }
 function err(ws, message) { send(ws, {type:'error',message}); }
 function findPlayer(id) { return Object.values(state.accounts).find(p=>p.id===id); }
+function findCombatant(b,id) { return b.dummy?.id===id ? b.dummy : findPlayer(id); }
 function cancelChannel(p, interrupted=true) {
   const channel = channels.get(p.id); if (!channel) return;
   clearTimeout(channel.timer); channels.delete(p.id);
@@ -80,10 +87,21 @@ function sendBattleEffect(b, p, enemy, action, item, result) {
 }
 function scheduleTurn(b) {
   clearTimeout(b.timer);
-  b.timer=setTimeout(()=>{if(!battles.has(b.id))return; const p=findPlayer(b.turn), enemy=findPlayer(b.players.find(i=>i!==b.turn));
+  // Practice targets wait rather than damage players; always return the turn.
+  if (b.dummy && b.turn===b.dummy.id) {
+    b.timer=setTimeout(()=>{
+      if(!battles.has(b.id))return;
+      const p=findPlayer(b.players[0]);
+      if(!p || !sockets.has(p.id)){endBattle(b);broadcast();return;}
+      b.turn=p.id; b.log='หุ่นฝึกรอรับการโจมตี'; scheduleTurn(b); broadcast();
+    },600);
+    return;
+  }
+  b.timer=setTimeout(()=>{if(!battles.has(b.id))return; const p=findPlayer(b.turn), enemy=findCombatant(b,b.players.find(i=>i!==b.turn));
     if(!p||!enemy){endBattle(b);save();broadcast();return;}
     const r=resolveAction({actor:p,target:enemy,action:{type:'defend'}}); Object.assign(p,r.actor); Object.assign(enemy,r.target);
-    b.log=`${p.name}: หมดเวลา ป้องกันอัตโนมัติ`; sendBattleEffect(b,p,enemy,'defend',null,r); if(p.hp<=0){kill(p);endBattle(b);}else{b.turn=enemy.id;scheduleTurn(b);} save();broadcast();
+    b.log=`${p.name}: หมดเวลา ป้องกันอัตโนมัติ`; sendBattleEffect(b,p,enemy,'defend',null,r);
+    if(p.hp<=0){if(b.dummy){p.hp=1;p.dead=false;}else kill(p);endBattle(b);}else{b.turn=enemy.id;scheduleTurn(b);} save();broadcast();
   },TURNS_MS);
 }
 function kill(victim) {
@@ -98,7 +116,7 @@ function kill(victim) {
 }
 function processAction(p, b, action, ws, item) {
   if (b.turn!==p.id) return err(ws,'ยังไม่ถึงเทิร์นของคุณ');
-  const enemy=findPlayer(b.players.find(i=>i!==p.id)); if(!enemy) return;
+  const enemy=findCombatant(b,b.players.find(i=>i!==p.id)); if(!enemy) return;
   const allowed=['attack','skill','item','defend','flee']; if(!allowed.includes(action)) return err(ws,'คำสั่งไม่ถูกต้อง');
   if(action==='item' && item!==undefined && !['potion','medicine'].includes(item))return err(ws,'ไอเทมไม่ถูกต้อง');
   const r=resolveAction({actor:p,target:enemy,action:{type:action,item:item||'potion'}});
@@ -108,8 +126,16 @@ function processAction(p, b, action, ws, item) {
   // of snapshots, so movement broadcasts and reconnects cannot replay old effects.
   sendBattleEffect(b,p,enemy,action,item,r);
   for(const participant of b.players){const participantSocket=sockets.get(participant);if(participantSocket)send(participantSocket,{type:'notice',message:b.log});}
-  if(enemy.hp<=0) { kill(enemy); endBattle(b); }
-  else if(p.hp<=0) { kill(p); endBattle(b); }
+  if(enemy.hp<=0) {
+    if(b.dummy) send(ws,{type:'notice',message:'ฝึกสำเร็จ หุ่นฝึกพร้อมใช้อีกครั้ง'});
+    else kill(enemy);
+    endBattle(b);
+  }
+  else if(p.hp<=0) {
+    if(b.dummy) {p.hp=1;p.dead=false;send(ws,{type:'notice',message:'จบการฝึกอย่างปลอดภัย'});}
+    else kill(p);
+    endBattle(b);
+  }
   else if(r.escaped) { endBattle(b); const nextX=Math.max(0,p.x-100); if(canTraverse(p.x,p.y,nextX,p.y)) p.x=nextX; }
   else { b.turn=enemy.id; scheduleTurn(b); }
   save(); broadcast();
@@ -183,6 +209,13 @@ function onMessage(ws, raw) {
       cancelChannel(target);cancelChannel(p);
       const b={id:id(),players:[p.id,target.id],turn:p.id,log:`${p.name} เริ่มโจมตี ${target.name}`};
       p.combatId=b.id;target.combatId=b.id;battles.set(b.id,b);save();scheduleTurn(b);broadcast();break;
+    }
+    case 'practice': {
+      if(p.dead||p.combatId||channels.has(p.id)) return err(ws,'ไม่สามารถเริ่มฝึกได้ขณะนี้');
+      if(distance(p,TRAINING_DUMMY)>150) return err(ws,'เข้าใกล้หุ่นฝึกก่อนเริ่มฝึก');
+      const dummy=createFighter({id:'dummy-'+id(),name:TRAINING_DUMMY.name,x:TRAINING_DUMMY.x,y:TRAINING_DUMMY.y,isDummy:true});
+      const b={id:id(),players:[p.id,dummy.id],turn:p.id,log:'เริ่มฝึกกับหุ่น: ไม่มีของตกหรือรางวัลปราณ',dummy};
+      p.combatId=b.id;battles.set(b.id,b);save();scheduleTurn(b);broadcast();break;
     }
     case 'action': {const b=battles.get(p.combatId);if(!b)return err(ws,'ไม่ได้อยู่ในการต่อสู้');processAction(p,b,m.action,ws,m.item);break;}
     case 'meditate': beginChannel(p,'meditate',null,ws);break;

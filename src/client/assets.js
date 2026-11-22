@@ -14,4 +14,8 @@ export const CHARACTER_ANIMATIONS = {
 
 // Optional transparent PNG portraits for the separate battle screen.
 // Null keeps the built-in placeholders. Images are shared by all characters for now.
-export const BATTLE_ART = { player: null, opponent: null };
+export const WORLD_ART = {
+  player: '/public/art/characters/murim-wanderer-v1.png',
+  dummy: '/public/art/characters/training-dummy-v1.png',
+};
+export const BATTLE_ART = { player: WORLD_ART.player, opponent: WORLD_ART.player, dummy: WORLD_ART.dummy };

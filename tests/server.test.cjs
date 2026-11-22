@@ -23,6 +23,58 @@ async function connect(port,name,token) {
   await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject)});send(c,{type:'join',name,token});await until(()=>c.welcome&&c.state,'join');return c;
 }
 function send(c,m){c.ws.send(JSON.stringify(m));}
+test('independent, repeatable dummy practice is nonlethal and creates no loot', {timeout:30000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  let proc,a,b;
+  try {
+    proc=await startServer(port,dataPath);a=await connect(port,'Student A');b=await connect(port,'Student B');
+    assert.equal(a.state.trainingDummy.name,'หุ่นฝึก');
+    send(a,{type:'practice'});send(b,{type:'practice'});
+    await until(()=>a.state.players.some(p=>p.isDummy)&&b.state.players.some(p=>p.isDummy),'two independent training sessions');
+    const ad=a.state.players.find(p=>p.isDummy),bd=b.state.players.find(p=>p.isDummy);
+    assert.notEqual(ad.id,bd.id);assert.equal(ad.hp,100);assert.equal(bd.hp,100);
+    const aId=a.state.you, initialPower=a.state.players.find(p=>p.id===aId).power;
+    send(a,{type:'action',action:'attack'});
+    await until(()=>a.state.players.find(p=>p.id===ad.id)?.hp===90,'dummy receives damage');
+    assert.equal(b.state.players.find(p=>p.id===bd.id).hp,100,'other practice is independent');
+    await until(()=>a.state.battles.some(x=>x.turn===aId),'dummy automatically returns turn');
+    for(let i=0;i<9;i++){
+      send(a,{type:'action',action:'attack'});
+      if(i<8) {
+        await until(()=>a.state.players.find(p=>p.id===ad.id)?.hp===80-i*10,'damage applied');
+        await until(()=>a.state.battles.some(x=>x.turn===aId),'next training turn');
+      }
+    }
+    await until(()=>!a.state.players.find(p=>p.isDummy),'practice ends on dummy defeat');
+    const trainee=a.state.players.find(p=>p.id===aId);
+    assert.equal(trainee.dead,false);assert.equal(trainee.hp,100);assert.equal(trainee.power,initialPower);
+    assert.equal(a.state.corpses.length,0,'practice must not drop loot or qi');
+    send(a,{type:'practice'});await until(()=>a.state.players.some(p=>p.isDummy),'dummy can be challenged again');
+    assert.equal(a.state.players.find(p=>p.isDummy).hp,100);
+    const latestId=a.state.players.find(p=>p.isDummy).id;
+    send(a,{type:'action',action:'attack'});await until(()=>a.state.players.find(p=>p.id===latestId)?.hp===90,'repeat attack');
+    a.ws.close(); await until(()=>b.state.battles.every(x=>!x.players.includes(aId)),'practice cleans up on disconnect');
+  } finally {
+    for(const c of [a,b])if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
+test('a lethal status tick in practice cannot permanently kill the trainee', {timeout:15000}, async()=>{
+  const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
+  const original={id:'poisoned-trainee',name:'Trainee',x:350,y:500,hp:1,maxHp:100,qi:100,qiMax:100,power:10,dead:false,poison:1,inventory:{potion:2,medicine:1},items:[]};
+  fs.writeFileSync(dataPath,JSON.stringify({accounts:{testtoken:original},corpses:[]}));
+  let proc,c;
+  try {
+    proc=await startServer(port,dataPath);c=await connect(port,'ignored','testtoken');
+    send(c,{type:'practice'});await until(()=>c.state.players.some(p=>p.isDummy),'practice started');
+    send(c,{type:'action',action:'attack'});await until(()=>!c.state.players.some(p=>p.isDummy),'safe practice ends');
+    const p=c.state.players.find(player=>player.id==='poisoned-trainee');
+    assert.equal(p.hp,1);assert.equal(p.dead,false);assert.equal(p.deaths,0);assert.equal(c.state.corpses.length,0);
+  } finally {
+    if(c?.ws.readyState===WebSocket.OPEN)c.ws.close();await stopServer(proc);
+    if(path.dirname(dir)===os.tmpdir()&&path.basename(dir).startsWith('murim-integration-'))fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
 test('authoritative battle, interrupted meditation, death, loot, rebirth and persistence across restart', {timeout:30000}, async()=>{
   const port=await freePort(), dir=fs.mkdtempSync(path.join(os.tmpdir(),'murim-integration-')), dataPath=path.join(dir,'state.json');
   let proc, a, b, restored;
